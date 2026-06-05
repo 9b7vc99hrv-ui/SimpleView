@@ -237,9 +237,17 @@ namespace SimpleView_DepthToPointCloud
             m_pollTimer.Tick += PollTimer_Tick;
         }
 
-        private void BtnRefresh_Click(object sender, EventArgs e)
+                private void BtnRefresh_Click(object sender, EventArgs e)
         {
-            LoadDevices();
+            // 点击刷新设备 → 重启整个应用程序
+            StopAcquisition();
+            if (m_snapshotImage != null)
+            {
+                m_snapshotImage.Dispose();
+                m_snapshotImage = null;
+            }
+            Mv3dLpSDK.MV3D_LP_Finalize();
+            Application.Restart();
         }
 
         private void LoadDevices()
