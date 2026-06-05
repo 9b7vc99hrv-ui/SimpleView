@@ -46,6 +46,9 @@ namespace SimpleView_DepthToPointCloud
         // 单位参数
         private float m_fCoordXUnit = 0.02f;
 
+        // 深度最值
+        private Label lblDepthMinMax;
+
         enum Mv3dLpImageMode
         {
             MV3D_LP_Origin_Image = 1,
@@ -61,6 +64,7 @@ namespace SimpleView_DepthToPointCloud
 
         public MainForm()
         {
+            Mv3dLpSDK.MV3D_LP_Initialize();
             m_gapDetector = new GapDetector();
             m_madHistory = new List<double>();
             InitializeComponent();
@@ -130,15 +134,17 @@ namespace SimpleView_DepthToPointCloud
             this.Controls.Add(groupThreshold);
 
             // === 左侧：状态信息 ===
-            GroupBox groupStatus = new GroupBox { Text = "状态信息", Left = 12, Top = 430, Width = 280, Height = 180 };
-            lblStatus = new Label { Text = "就绪", Left = 10, Top = 20, Width = 255, Height = 30 };
+            GroupBox groupStatus = new GroupBox { Text = "状态信息", Left = 12, Top = 430, Width = 280, Height = 210 };
+            lblStatus = new Label { Text = "就绪", Left = 10, Top = 20, Width = 255, Height = 25 };
             groupStatus.Controls.Add(lblStatus);
-            lblFrameInfo = new Label { Text = "", Left = 10, Top = 55, Width = 255, Height = 30 };
+            lblFrameInfo = new Label { Text = "", Left = 10, Top = 48, Width = 255, Height = 25 };
             groupStatus.Controls.Add(lblFrameInfo);
-            lblGapInfo = new Label { Text = "缝隙检测: 未启动", Left = 10, Top = 90, Width = 255, Height = 30 };
+            lblGapInfo = new Label { Text = "缝隙检测: 未启动", Left = 10, Top = 76, Width = 255, Height = 25 };
             groupStatus.Controls.Add(lblGapInfo);
-            lblMadValue = new Label { Text = "MAD Z值: --", Left = 10, Top = 125, Width = 255, Height = 30 };
+            lblMadValue = new Label { Text = "MAD Z值: --", Left = 10, Top = 104, Width = 255, Height = 25 };
             groupStatus.Controls.Add(lblMadValue);
+            lblDepthMinMax = new Label { Text = "深度最值: --", Left = 10, Top = 132, Width = 255, Height = 25 };
+            groupStatus.Controls.Add(lblDepthMinMax);
 
             this.Controls.Add(groupStatus);
 
@@ -406,6 +412,7 @@ namespace SimpleView_DepthToPointCloud
 
             lblGapInfo.Text = "缝隙检测: 已停止";
             lblMadValue.Text = "MAD Z值: --";
+            lblDepthMinMax.Text = "深度最值: --";
         }
 
         private void PollTimer_Tick(object sender, EventArgs e)
@@ -447,6 +454,11 @@ namespace SimpleView_DepthToPointCloud
                     }
 
                     // ============================================================
+                    // 新增：在状态信息中显示最上层和最下层数值
+                    // ============================================================
+                    UpdateDepthMinMaxLabel(stImage);
+
+                    // ============================================================
                     // 新增逻辑：缝隙检测 + MAD计算
                     // ============================================================
                     ProcessAnomalyDetection(stImage);
@@ -455,6 +467,10 @@ namespace SimpleView_DepthToPointCloud
                     // 新增逻辑：更新右侧UI
                     // ============================================================
                     UpdateRightPanel();
+                }
+                else if (nRet == unchecked((int)0x80060006))
+                {
+                    // MV3D_LP_E_NODATA：暂无新数据，属于正常情况，不显示错误
                 }
                 else if (nRet != 1)
                 {
@@ -598,6 +614,117 @@ namespace SimpleView_DepthToPointCloud
             catch (Exception ex)
             {
                 lblGapInfo.Text = string.Format("检测异常: {0}", ex.Message);
+            }
+        }
+
+        /// <summary>
+        /// 从深度图原始像素值中提取最上层（最小值）和最下层（最大值），
+        /// 并更新到状态信息面板的文字中
+        /// </summary>
+        private void UpdateDepthMinMaxLabel(MV3D_LP_IMAGE_DATA stImage)
+        {
+            if (stImage.pData == IntPtr.Zero || stImage.nDataLen == 0 || stImage.nWidth == 0)
+            {
+                lblDepthMinMax.Text = "深度最值: --";
+                return;
+            }
+
+            try
+            {
+                if (stImage.enImageType == Mv3dLpSDK.ImageType_Depth)
+                {
+                    // 深度图：每个像素是16位有符号整数（short），原始值÷100=毫米
+                    int pixelCount = (int)(stImage.nWidth * stImage.nHeight);
+                    if (pixelCount <= 0 || stImage.nDataLen < pixelCount * 2)
+                    {
+                        lblDepthMinMax.Text = "深度范围: --";
+                        return;
+                    }
+
+                    byte[] buffer = new byte[pixelCount * 2];
+                    Marshal.Copy(stImage.pData, buffer, 0, pixelCount * 2);
+
+                    short minVal = short.MaxValue;
+                    short maxVal = short.MinValue;
+                    int validCount = 0;
+
+                    for (int i = 0; i < pixelCount; i++)
+                    {
+                        short depthVal = BitConverter.ToInt16(buffer, i * 2);
+                        if (depthVal > 0)
+                        {
+                            if (depthVal < minVal) minVal = depthVal;
+                            if (depthVal > maxVal) maxVal = depthVal;
+                            validCount++;
+                        }
+                    }
+
+                    if (validCount > 0)
+                    {
+                        // 原始值÷100=毫米
+                        float minMm = minVal / 100f;
+                        float maxMm = maxVal / 100f;
+                        float diffMm = (maxVal - minVal) / 100f;
+                        lblDepthMinMax.Text = string.Format("深度范围: 上层={0:F2}mm  下层={1:F2}mm  差值={2:F2}mm", minMm, maxMm, diffMm);
+                    }
+                    else
+                    {
+                        lblDepthMinMax.Text = "深度范围: 无有效数据";
+                    }
+                }
+                else if (stImage.enImageType == Mv3dLpSDK.ImageType_PointCloud)
+                {
+                    // 点云图：读取Z值，找出最大最小Z的差
+                    int byteCount = (int)stImage.nDataLen;
+                    if (byteCount < 12)
+                    {
+                        lblDepthMinMax.Text = "深度最值: --";
+                        return;
+                    }
+
+                    byte[] pcBuffer = new byte[byteCount];
+                    Marshal.Copy(stImage.pData, pcBuffer, 0, byteCount);
+
+                    int totalPoints = (int)(stImage.nWidth * stImage.nHeight);
+                    if (totalPoints <= 0)
+                    {
+                        lblDepthMinMax.Text = "深度最值: --";
+                        return;
+                    }
+
+                    float minZ = float.MaxValue;
+                    float maxZ = float.MinValue;
+                    int validCount = 0;
+
+                    for (int i = 0; i < totalPoints; i++)
+                    {
+                        float z = BitConverter.ToSingle(pcBuffer, (i * 3 + 2) * 4);
+                        if (!float.IsNaN(z) && !float.IsInfinity(z))
+                        {
+                            if (z < minZ) minZ = z;
+                            if (z > maxZ) maxZ = z;
+                            validCount++;
+                        }
+                    }
+
+                    if (validCount > 0)
+                    {
+                        float diff = Math.Abs(maxZ - minZ);
+                        lblDepthMinMax.Text = string.Format("深度范围: 上层={0:F2}mm  下层={1:F2}mm  差值={2:F2}mm", minZ, maxZ, diff);
+                    }
+                    else
+                    {
+                        lblDepthMinMax.Text = "深度范围: 无有效数据";
+                    }
+                }
+                else
+                {
+                    lblDepthMinMax.Text = "深度范围: 当前模式不支持";
+                }
+            }
+            catch
+            {
+                lblDepthMinMax.Text = "深度范围: 读取异常";
             }
         }
 
