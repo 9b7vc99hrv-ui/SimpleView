@@ -21,9 +21,17 @@ namespace SimpleView_DepthToPointCloud
         private Button btnRefresh;
         private Label lblStatus;
         private Label lblFrameInfo;
-        private NumericUpDown nudDepthMin;
-        private NumericUpDown nudDepthMax;
         private ComboBox cmbImageMode;
+
+        // 控件 - 左侧（输入参数）
+        private Label lblLineWidth;
+        private Label lblLineHeight;
+        private Label lblTurnsPerLayer;
+        private Label lblLayerCount;
+        private NumericUpDown nudLineWidth;
+        private NumericUpDown nudLineHeight;
+        private NumericUpDown nudTurnsPerLayer;
+        private NumericUpDown nudLayerCount;
 
         // 控件 - 右侧（新增）
         private PictureBox pictureBoxSnap;
@@ -118,20 +126,32 @@ namespace SimpleView_DepthToPointCloud
 
             this.Controls.Add(groupControl);
 
-            // === 左侧：深度渲染阈值 ===
-            GroupBox groupThreshold = new GroupBox { Text = "深度渲染阈值", Left = 12, Top = 320, Width = 280, Height = 100 };
+            // === 左侧：输入参数（先验知识） ===
+            GroupBox groupParams = new GroupBox { Text = "输入参数（先验知识）", Left = 12, Top = 320, Width = 280, Height = 110 };
 
-            Label lblMin = new Label { Text = "最小值:", Left = 10, Top = 25, Width = 60 };
-            groupThreshold.Controls.Add(lblMin);
-            nudDepthMin = new NumericUpDown { Left = 75, Top = 22, Width = 90, Minimum = 0, Maximum = 100000, Value = 0 };
-            groupThreshold.Controls.Add(nudDepthMin);
+            // 第一行：线宽 d + 每层匝数 N
+            Label lblWd = new Label { Text = "线宽 d (mm):", Left = 8, Top = 25, Width = 78 };
+            groupParams.Controls.Add(lblWd);
+            nudLineWidth = new NumericUpDown { Left = 88, Top = 23, Width = 60, Minimum = 0.01M, Maximum = 100M, Value = 4.10M, DecimalPlaces = 2 };
+            groupParams.Controls.Add(nudLineWidth);
 
-            Label lblMax = new Label { Text = "最大值:", Left = 10, Top = 55, Width = 60 };
-            groupThreshold.Controls.Add(lblMax);
-            nudDepthMax = new NumericUpDown { Left = 75, Top = 52, Width = 90, Minimum = 0, Maximum = 100000, Value = 5000 };
-            groupThreshold.Controls.Add(nudDepthMax);
+            Label lblTn = new Label { Text = "每层匝数 N:", Left = 155, Top = 25, Width = 72 };
+            groupParams.Controls.Add(lblTn);
+            nudTurnsPerLayer = new NumericUpDown { Left = 229, Top = 23, Width = 42, Minimum = 1, Maximum = 999, Value =  8};
+            groupParams.Controls.Add(nudTurnsPerLayer);
 
-            this.Controls.Add(groupThreshold);
+            // 第二行：线高 h + 总层数 L
+            Label lblHt = new Label { Text = "线高 h (mm):", Left = 8, Top = 55, Width = 78 };
+            groupParams.Controls.Add(lblHt);
+            nudLineHeight = new NumericUpDown { Left = 88, Top = 53, Width = 60, Minimum = 0.01M, Maximum = 100M, Value = 1.70M, DecimalPlaces = 2 };
+            groupParams.Controls.Add(nudLineHeight);
+
+            Label lblLc = new Label { Text = "总层数 L:", Left = 155, Top = 55, Width = 72 };
+            groupParams.Controls.Add(lblLc);
+            nudLayerCount = new NumericUpDown { Left = 229, Top = 53, Width = 42, Minimum = 1, Maximum = 999, Value = 9 };
+            groupParams.Controls.Add(nudLayerCount);
+
+            this.Controls.Add(groupParams);
 
             // === 左侧：状态信息 ===
             GroupBox groupStatus = new GroupBox { Text = "状态信息", Left = 12, Top = 430, Width = 280, Height = 210 };
@@ -440,8 +460,8 @@ namespace SimpleView_DepthToPointCloud
                         stImage,
                         pictureBoxDepth.Handle,
                         (uint)DISPLAY_ADAPTIVE,
-                        (int)nudDepthMin.Value,
-                        (int)nudDepthMax.Value
+                        0,
+                        30000
                     );
 
                     if (0 != nRet)
