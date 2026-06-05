@@ -474,54 +474,163 @@ namespace SimpleView_DepthToPointCloud
 
             try
             {
-                short[] depthBuffer = new short[(int)stImage.nDataLen / 2];
-                Marshal.Copy(stImage.pData, depthBuffer, 0, (int)stImage.nDataLen / 2);
-
-                short[] depthLine;
-                if (stImage.nHeight > 1)
+                // 从点云数据中提取Z值做缝隙检测
+                // 先判断当前图像类型
+                if (stImage.enImageType == Mv3dLpSDK.ImageType_Depth)
                 {
-                    depthLine = GapDetector.ExtractDepthLine(depthBuffer,
-                        (int)stImage.nWidth, (int)stImage.nHeight, (int)stImage.nHeight / 2);
-                }
-                else
-                {
-                    depthLine = depthBuffer;
-                }
-
-                GapDetector.GapResult result = m_gapDetector.ProcessDepthLine(depthLine, (int)stImage.nWidth);
-                m_lastGapResult = result;
-
-                if (result.HasValidData)
-                {
-                    m_madHistory.Add(result.ModifiedZScore);
-                    if (m_madHistory.Count > MAX_MAD_HISTORY)
+                    // 深度图 → 先转成点云，再取Z值
+                    MV3D_LP_IMAGE_DATA stPointCloud = new MV3D_LP_IMAGE_DATA();
+                    int nRet = Mv3dLpSDK.MV3D_LP_MapDepthToPointCloud(stImage, stPointCloud);
+                    if (0 != nRet)
                     {
-                        m_madHistory.RemoveAt(0);
+                        lblGapInfo.Text = string.Format("点云转换失败: 0x{0:x}", nRet);
+                        return;
                     }
 
-                    if (result.IsAnomaly)
+                    // 从点云数据中取Z值
+                    byte[] pcBuffer = new byte[(int)stPointCloud.nDataLen];
+                    Marshal.Copy(stPointCloud.pData, pcBuffer, 0, (int)stPointCloud.nDataLen);
+
+                    int pointCount = (int)stPointCloud.nDataLen / 4;  // 每个值4字节float
+                    float[] pcData = new float[pointCount];
+                    for (int i = 0; i < pointCount; i++)
                     {
-                        if (!m_hasAnomaly || m_anomalyFrameNum != stImage.nFrameNum)
+                        pcData[i] = BitConverter.ToSingle(pcBuffer, i * 4);
+                    }
+
+                    // 提取Z值（每个点3个float: X,Y,Z, X,Y,Z...）
+                    int totalPoints = (int)(stPointCloud.nWidth * stPointCloud.nHeight);
+                    if (totalPoints <= 0 || pointCount < totalPoints * 3)
+                    {
+                        lblGapInfo.Text = "点云数据格式异常";
+                        return;
+                    }
+
+                    short[] zValues = new short[totalPoints];
+                    for (int i = 0; i < totalPoints; i++)
+                    {
+                        float z = pcData[i * 3 + 2];
+                        // 将float Z值转为short（保留有效范围）
+                        if (float.IsNaN(z) || float.IsInfinity(z) || z <= -99999 || z >= 99999)
+                            zValues[i] = 0;
+                        else
                         {
-                            m_hasAnomaly = true;
-                            m_anomalyFrameNum = (int)stImage.nFrameNum;
-                            CaptureSnapshot();
+                            // Z值可能是毫米单位，需要转成适合short的范围
+                            // 乘以100保留两位小数精度
+                            double zScaled = z * 100;
+                            if (zScaled > 32767) zValues[i] = 32767;
+                            else if (zScaled < -32768) zValues[i] = -32768;
+                            else zValues[i] = (short)zScaled;
                         }
                     }
 
-                    lblGapInfo.Text = string.Format("缝隙数: {0}  平均间距: {1:F2}mm",
-                        result.GapCount, result.AvgGapMm);
-                    lblMadValue.Text = string.Format("MAD Z值: {0:F2}  (阈值: {1:F1})",
-                        result.ModifiedZScore, m_gapDetector.ThresholdZ);
+                    short[] depthLine;
+                    if (stPointCloud.nHeight > 1)
+                    {
+                        depthLine = GapDetector.ExtractDepthLine(zValues,
+                            (int)stPointCloud.nWidth, (int)stPointCloud.nHeight,
+                            (int)stPointCloud.nHeight / 2);
+                    }
+                    else
+                    {
+                        depthLine = zValues;
+                    }
+
+                    // 用Z值来做缝隙检测
+                    GapDetector.GapResult result = m_gapDetector.ProcessDepthLine(depthLine, (int)stPointCloud.nWidth);
+                    UpdateGapResult(result, stImage.nFrameNum);
+                }
+                else if (stImage.enImageType == Mv3dLpSDK.ImageType_PointCloud)
+                {
+                    // 直接是点云数据
+                    byte[] pcBuffer = new byte[(int)stImage.nDataLen];
+                    Marshal.Copy(stImage.pData, pcBuffer, 0, (int)stImage.nDataLen);
+
+                    int pointCount = (int)stImage.nDataLen / 4;
+                    float[] pcData = new float[pointCount];
+                    for (int i = 0; i < pointCount; i++)
+                    {
+                        pcData[i] = BitConverter.ToSingle(pcBuffer, i * 4);
+                    }
+
+                    int totalPoints = (int)(stImage.nWidth * stImage.nHeight);
+                    if (totalPoints <= 0 || pointCount < totalPoints * 3)
+                    {
+                        lblGapInfo.Text = "点云数据格式异常";
+                        return;
+                    }
+
+                    short[] zValues = new short[totalPoints];
+                    for (int i = 0; i < totalPoints; i++)
+                    {
+                        float z = pcData[i * 3 + 2];
+                        if (float.IsNaN(z) || float.IsInfinity(z) || z <= -99999 || z >= 99999)
+                            zValues[i] = 0;
+                        else
+                        {
+                            double zScaled = z * 100;
+                            if (zScaled > 32767) zValues[i] = 32767;
+                            else if (zScaled < -32768) zValues[i] = -32768;
+                            else zValues[i] = (short)zScaled;
+                        }
+                    }
+
+                    short[] depthLine;
+                    if (stImage.nHeight > 1)
+                    {
+                        depthLine = GapDetector.ExtractDepthLine(zValues,
+                            (int)stImage.nWidth, (int)stImage.nHeight,
+                            (int)stImage.nHeight / 2);
+                    }
+                    else
+                    {
+                        depthLine = zValues;
+                    }
+
+                    GapDetector.GapResult result = m_gapDetector.ProcessDepthLine(depthLine, (int)stImage.nWidth);
+                    UpdateGapResult(result, stImage.nFrameNum);
                 }
                 else
                 {
-                    lblGapInfo.Text = "缝隙检测: 数据不足";
+                    lblGapInfo.Text = "不支持的图像类型用于缝隙检测";
                 }
             }
             catch (Exception ex)
             {
                 lblGapInfo.Text = string.Format("检测异常: {0}", ex.Message);
+            }
+        }
+
+        private void UpdateGapResult(GapDetector.GapResult result, uint frameNum)
+        {
+            m_lastGapResult = result;
+
+            if (result.HasValidData)
+            {
+                m_madHistory.Add(result.ModifiedZScore);
+                if (m_madHistory.Count > MAX_MAD_HISTORY)
+                {
+                    m_madHistory.RemoveAt(0);
+                }
+
+                if (result.IsAnomaly)
+                {
+                    if (!m_hasAnomaly || m_anomalyFrameNum != frameNum)
+                    {
+                        m_hasAnomaly = true;
+                        m_anomalyFrameNum = (int)frameNum;
+                        CaptureSnapshot();
+                    }
+                }
+
+                lblGapInfo.Text = string.Format("缝隙数: {0}  平均间距: {1:F2}mm",
+                    result.GapCount, result.AvgGapMm);
+                lblMadValue.Text = string.Format("MAD Z值: {0:F2}  (阈值: {1:F1})",
+                    result.ModifiedZScore, m_gapDetector.ThresholdZ);
+            }
+            else
+            {
+                lblGapInfo.Text = "缝隙检测: 数据不足";
             }
         }
 
