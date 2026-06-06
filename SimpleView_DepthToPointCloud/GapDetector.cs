@@ -71,6 +71,10 @@ namespace SimpleView_DepthToPointCloud
         /// <summary>每像素对应毫米数，由SDK的LSLProfileCoordXUnit填入</summary>
         public double MmPerPixel { get; set; } = 0.02;
 
+                // ── 新增：基准线存储 ──
+        private float[] m_baseline = null;
+        public bool HasBaseline => m_baseline != null;
+
         // ── 新增先验知识参数（由UI的NumericUpDown同步过来）──
         /// <summary>线宽 d (mm)</summary>
         public float WireWidth { get; set; } = 4.10f;
@@ -92,6 +96,30 @@ namespace SimpleView_DepthToPointCloud
         public float MissingRatio { get; set; } = 0.70f;
 
         // =====================================================================
+        // 基准线校准
+        // =====================================================================
+        /// <summary>
+        /// 外部校准入口：传入原始 short[] 深度数据，内部调用 Preprocess
+        /// 平滑后作为基准线存储。
+        /// 后续 ProcessDepthLine 会从实时数据中减去该基准线，使测量结果
+        /// 以基准面为参照，消除圆筒弧面/传感器安装倾角等固定偏差。
+        /// </summary>
+        public void CalibrateBaseline(short[] depthData, int width)
+        {
+            float[] smoothed = Preprocess(depthData, width);
+            if (smoothed != null)
+                m_baseline = (float[])smoothed.Clone();
+        }
+
+        /// <summary>
+        /// 清除已存储的基准线，恢复原始测量模式。
+        /// </summary>
+        public void ClearBaseline()
+        {
+            m_baseline = null;
+        }
+
+        // =====================================================================
         // 主入口：处理一行深度数据
         // =====================================================================
         /// <summary>
@@ -107,10 +135,21 @@ namespace SimpleView_DepthToPointCloud
             if (depthData == null || width < 20)
                 return result;
 
-            // 1. 预处理：中值滤波去噪
+                        // 1. 预处理：中值滤波去噪
             float[] smoothed = Preprocess(depthData, width);
             if (smoothed == null || smoothed.Length < 20)
                 return result;
+
+            // ── 基准补偿：每点减去基准值，消除圆筒弧面误差 ──
+            if (m_baseline != null && m_baseline.Length == smoothed.Length)
+            {
+                for (int i = 0; i < smoothed.Length; i++)
+                {
+                    if (smoothed[i] > 0 && m_baseline[i] > 0)
+                        smoothed[i] = smoothed[i] - m_baseline[i] + 10000; // 平移到正值区间
+                    // 若基准点无效则保持原值
+                }
+            }
 
             // 2. 找到最上层基准（最高波峰的深度值，depth值越小=越靠近传感器=越高）
             float topLayerDepth = float.MaxValue;
@@ -192,7 +231,7 @@ namespace SimpleView_DepthToPointCloud
         /// 用已知的 WireWidth/WireHeight/TurnsPerLayer 做物理约束校验，
         /// 将异常分类为骑线/跨线/压线/缺线，写入 result.Defects。
         /// </summary>
-        private void RunPeakInspection(float[] smoothed, GapResult result)
+                private void RunPeakInspection(float[] smoothed, GapResult result)
         {
             float mmPerPt = (float)MmPerPixel;
             if (mmPerPt <= 0) mmPerPt = 0.02f;

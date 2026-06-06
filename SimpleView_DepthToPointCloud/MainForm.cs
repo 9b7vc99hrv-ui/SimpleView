@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.Linq;
 using System.Windows.Forms;
 using System.Runtime.InteropServices;
 
@@ -163,8 +164,20 @@ namespace SimpleView_DepthToPointCloud
             groupStatus.Controls.Add(lblGapInfo);
             lblMadValue = new Label { Text = "MAD Z值: --", Left = 10, Top = 104, Width = 255, Height = 25 };
             groupStatus.Controls.Add(lblMadValue);
-            lblDepthMinMax = new Label { Text = "深度最值: --", Left = 10, Top = 132, Width = 255, Height = 25 };
+                        lblDepthMinMax = new Label { Text = "深度最值: --", Left = 10, Top = 132, Width = 255, Height = 25 };
             groupStatus.Controls.Add(lblDepthMinMax);
+
+            // ── 新增：基准校准按钮 ──
+            Button btnCalibrate = new Button
+            {
+                Text = "校准基准（空筒）",
+                Left = 10, Top = 160,
+                Width = 255, Height = 30,
+                BackColor = Color.FromArgb(0, 120, 215),
+                ForeColor = Color.White
+            };
+            btnCalibrate.Click += BtnCalibrate_Click;
+            groupStatus.Controls.Add(btnCalibrate);
 
             this.Controls.Add(groupStatus);
 
@@ -421,11 +434,14 @@ namespace SimpleView_DepthToPointCloud
             }
         }
 
-        private void StopAcquisition()
+                private void StopAcquisition()
         {
             m_pollTimer.Stop();
             m_bExitMain = true;
             m_bMeasuring = false;
+
+            // 停止时清除基准线
+            m_gapDetector.ClearBaseline();
 
             if (m_handle != IntPtr.Zero)
             {
@@ -946,6 +962,46 @@ namespace SimpleView_DepthToPointCloud
                 pictureBoxMadChart.Image.Dispose();
             }
             pictureBoxMadChart.Image = bmp;
+        }
+
+                /// <summary>
+        /// 校准基准（空筒）：抓取当前一帧，平滑后存入 GapDetector 作为基准线。
+        /// 后续所有深度值都会减去这条基准线，使高差从0开始。
+        /// </summary>
+        private void BtnCalibrate_Click(object sender, EventArgs e)
+        {
+            if (!m_bMeasuring || m_handle == IntPtr.Zero)
+            {
+                lblStatus.Text = "请先开始采集再校准";
+                return;
+            }
+
+            // 抓当前一帧做基准
+            MV3D_LP_IMAGE_DATA stImage = new MV3D_LP_IMAGE_DATA();
+            int nRet = Mv3dLpSDK.MV3D_LP_GetImage(m_handle, stImage, 1000);
+            if (nRet != 0)
+            {
+                lblStatus.Text = "校准失败：无法获取图像";
+                return;
+            }
+
+            int pixelCount = (int)(stImage.nWidth * stImage.nHeight);
+            byte[] buffer = new byte[pixelCount * 2];
+            Marshal.Copy(stImage.pData, buffer, 0, pixelCount * 2);
+
+            short[] depthValues = new short[pixelCount];
+            for (int i = 0; i < pixelCount; i++)
+                depthValues[i] = BitConverter.ToInt16(buffer, i * 2);
+
+            short[] depthLine = stImage.nHeight > 1
+                ? GapDetector.ExtractDepthLineAvg(depthValues,
+                    (int)stImage.nWidth, (int)stImage.nHeight,
+                    (int)stImage.nHeight / 2, halfWindow: 2)
+                : depthValues;
+
+            m_gapDetector.CalibrateBaseline(depthLine, (int)stImage.nWidth);
+            lblStatus.Text = string.Format("✓ 基准校准完成  有效点:{0}",
+                depthLine.Count(v => v > 0));
         }
 
         private void MainForm_FormClosing(object sender, FormClosingEventArgs e)
