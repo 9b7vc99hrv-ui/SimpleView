@@ -33,12 +33,12 @@ namespace SimpleView_DepthToPointCloud
             public List<double> GapDistancesMm { get; set; }
             public bool HasValidData { get; set; }
 
-                        // ── 新增字段 ──
+            // ── 新增字段 ──
             /// <summary>从峰数量推断的当前匝数</summary>
             public int InferredTurn { get; set; }
             /// <summary>从峰高度推断的当前层数（需要标定基准后才准确，-1表示未标定）</summary>
             public int InferredLayer { get; set; } = -1;
-                        /// <summary>分类异常列表</summary>
+            /// <summary>分类异常列表</summary>
             public List<DefectInfo> Defects { get; set; } = new List<DefectInfo>();
         }
 
@@ -65,13 +65,13 @@ namespace SimpleView_DepthToPointCloud
         // 配置参数
         // =====================================================================
 
-                // ── 原有参数（不动）──
-                /// <summary>MAD Modified Z-score 异常阈值，原有逻辑使用</summary>
-                public double ThresholdZ { get; set; } = 5.0;
-                /// <summary>每像素对应毫米数，由SDK的LSLProfileCoordXUnit填入</summary>
-                public double MmPerPixel { get; set; } = 0.02;
+        // ── 原有参数（不动）──
+        /// <summary>MAD Modified Z-score 异常阈值，原有逻辑使用</summary>
+        public double ThresholdZ { get; set; } = 5.0;
+        /// <summary>每像素对应毫米数，由SDK的LSLProfileCoordXUnit填入</summary>
+        public double MmPerPixel { get; set; } = 0.02;
 
-                // ── 新增先验知识参数（由UI的NumericUpDown同步过来）──
+        // ── 新增先验知识参数（由UI的NumericUpDown同步过来）──
         /// <summary>线宽 d (mm)</summary>
         public float WireWidth { get; set; } = 4.10f;
         /// <summary>线高 h (mm)</summary>
@@ -107,12 +107,12 @@ namespace SimpleView_DepthToPointCloud
             if (depthData == null || width < 20)
                 return result;
 
-                        // 1. 预处理：中值滤波去噪
-                        float[] smoothed = Preprocess(depthData, width);
-                        if (smoothed == null || smoothed.Length < 20)
-                            return result;
+            // 1. 预处理：中值滤波去噪
+            float[] smoothed = Preprocess(depthData, width);
+            if (smoothed == null || smoothed.Length < 20)
+                return result;
 
-                        // 2. 找到最上层基准（最高波峰的深度值，depth值越小=越靠近传感器=越高）
+            // 2. 找到最上层基准（最高波峰的深度值，depth值越小=越靠近传感器=越高）
             float topLayerDepth = float.MaxValue;
             for (int i = 0; i < smoothed.Length; i++)
             {
@@ -192,7 +192,7 @@ namespace SimpleView_DepthToPointCloud
         /// 用已知的 WireWidth/WireHeight/TurnsPerLayer 做物理约束校验，
         /// 将异常分类为骑线/跨线/压线/缺线，写入 result.Defects。
         /// </summary>
-                private void RunPeakInspection(float[] smoothed, GapResult result)
+        private void RunPeakInspection(float[] smoothed, GapResult result)
         {
             float mmPerPt = (float)MmPerPixel;
             if (mmPerPt <= 0) mmPerPt = 0.02f;
