@@ -52,8 +52,15 @@ namespace SimpleView_DepthToPointCloud
         private Bitmap m_snapshotImage = null;
         private int m_anomalyFrameNum = 0;
 
-        // 单位参数
+                // 单位参数
         private float m_fCoordXUnit = 0.02f;
+
+                // 空筒基准差值
+        private float m_baselineDiffMm = 0f;
+        private bool m_hasBaseline = false;
+
+        // 当前帧原始深度差值（mm）
+        private float m_currentRawDiffMm = 0f;
 
         // 深度最值
         private Label lblDepthMinMax;
@@ -164,22 +171,22 @@ namespace SimpleView_DepthToPointCloud
             groupStatus.Controls.Add(lblGapInfo);
             lblMadValue = new Label { Text = "MAD Z值: --", Left = 10, Top = 104, Width = 255, Height = 25 };
             groupStatus.Controls.Add(lblMadValue);
-                        lblDepthMinMax = new Label { Text = "深度最值: --", Left = 10, Top = 132, Width = 255, Height = 25 };
-            groupStatus.Controls.Add(lblDepthMinMax);
+                                                lblDepthMinMax = new Label { Text = "深度最值: --", Left = 10, Top = 132, Width = 255, Height = 25 };
+                                                groupStatus.Controls.Add(lblDepthMinMax);
 
-            // ── 新增：基准校准按钮 ──
-            Button btnCalibrate = new Button
-            {
-                Text = "校准基准（空筒）",
-                Left = 10, Top = 160,
-                Width = 255, Height = 30,
-                BackColor = Color.FromArgb(0, 120, 215),
-                ForeColor = Color.White
-            };
-            btnCalibrate.Click += BtnCalibrate_Click;
-            groupStatus.Controls.Add(btnCalibrate);
+                                                // ── 空筒基准校准按钮 ──
+                                                Button btnCalibrate = new Button
+                                                {
+                                                    Text = "校准基准（空筒）",
+                                                    Left = 10, Top = 160,
+                                                    Width = 255, Height = 30,
+                                                    BackColor = Color.FromArgb(0, 120, 215),
+                                                    ForeColor = Color.White
+                                                };
+                                                btnCalibrate.Click += BtnCalibrate_Click;
+                                                groupStatus.Controls.Add(btnCalibrate);
 
-            this.Controls.Add(groupStatus);
+                                                this.Controls.Add(groupStatus);
 
             // === 左侧：深度图像显示区域 ===
             GroupBox groupDisplay = new GroupBox { Text = "深度图像显示", Left = 305, Top = 12, Width = 700, Height = 598 };
@@ -440,8 +447,9 @@ namespace SimpleView_DepthToPointCloud
             m_bExitMain = true;
             m_bMeasuring = false;
 
-            // 停止时清除基准线
-            m_gapDetector.ClearBaseline();
+                        // 停止时清除基准线
+                        m_hasBaseline = false;
+                        m_baselineDiffMm = 0f;
 
             if (m_handle != IntPtr.Zero)
             {
@@ -474,11 +482,25 @@ namespace SimpleView_DepthToPointCloud
 
                 if (0 == nRet)
                 {
-                    lblFrameInfo.Text = string.Format("帧号: {0}  尺寸: {1} x {2}  数据长度: {3}  类型: {4}",
+                                                                                lblFrameInfo.Text = string.Format("帧号: {0}  尺寸: {1} x {2}  数据长度: {3}  类型: {4}",
     stImage.nFrameNum, stImage.nWidth, stImage.nHeight, stImage.nDataLen, stImage.enImageType);
 
                     // ============================================================
-                    // 原有逻辑：SDK显示图像（完全不动）
+                    // 同步UI参数到检测器
+                    // ============================================================
+                    m_gapDetector.WireWidth = (float)nudLineWidth.Value;
+                    m_gapDetector.WireHeight = (float)nudLineHeight.Value;
+                    m_gapDetector.TurnsPerLayer = (int)nudTurnsPerLayer.Value;
+                    m_gapDetector.TotalLayers = (int)nudLayerCount.Value;
+
+                    // ============================================================
+                    // ★ 在 DisplayImage 之前做缝隙检测，避免 SDK 显示函数
+                    //    可能修改 pData 缓冲区内容导致数据异常 ★
+                    // ============================================================
+                    ProcessAnomalyDetection(stImage);
+
+                    // ============================================================
+                    // 原有逻辑：SDK显示图像
                     // ============================================================
                     nRet = Mv3dLpSDK.MV3D_LP_DisplayImage(
                         stImage,
@@ -496,24 +518,6 @@ namespace SimpleView_DepthToPointCloud
                     {
                         lblStatus.Text = "采集中 - 接收正常";
                     }
-
-                    // ============================================================
-                    // 新增：在状态信息中显示最上层和最下层数值
-                    // ============================================================
-                    UpdateDepthMinMaxLabel(stImage);
-
-                    // ============================================================
-                    // 新增逻辑：同步UI参数到检测器
-                    // ============================================================
-                    m_gapDetector.WireWidth = (float)nudLineWidth.Value;
-                    m_gapDetector.WireHeight = (float)nudLineHeight.Value;
-                    m_gapDetector.TurnsPerLayer = (int)nudTurnsPerLayer.Value;
-                    m_gapDetector.TotalLayers = (int)nudLayerCount.Value;
-
-                    // ============================================================
-                    // 新增逻辑：缝隙检测 + MAD计算
-                    // ============================================================
-                    ProcessAnomalyDetection(stImage);
 
                     // ============================================================
                     // 新增逻辑：更新右侧UI
@@ -550,7 +554,7 @@ namespace SimpleView_DepthToPointCloud
                     return;
                 }
 
-                if (stImage.enImageType == Mv3dLpSDK.ImageType_Depth)
+                                if (stImage.enImageType == Mv3dLpSDK.ImageType_Depth)
                 {
                     // 深度图：直接解析 short 深度值（原始值÷100=毫米），不调用 MapDepthToPointCloud
                     int pixelCountDepth = (int)(stImage.nWidth * stImage.nHeight);
@@ -581,6 +585,10 @@ namespace SimpleView_DepthToPointCloud
                         depthLine = depthValues;
                     }
 
+                                                            // 计算当前原始深度差值
+                    ComputeRawDiffMm(depthLine);
+
+                                        // 用 ProcessDepthLine 内部补偿后的范围数据显示
                     GapDetector.GapResult result = m_gapDetector.ProcessDepthLine(depthLine, (int)stImage.nWidth);
                     UpdateGapResult(result, stImage.nFrameNum);
                 }
@@ -614,6 +622,10 @@ namespace SimpleView_DepthToPointCloud
                         depthLine = depthValues;
                     }
 
+                                                            // 计算当前原始深度差值
+                    ComputeRawDiffMm(depthLine);
+
+                                        // 用 ProcessDepthLine 内部补偿后的范围数据显示
                     GapDetector.GapResult result = m_gapDetector.ProcessDepthLine(depthLine, (int)stImage.nWidth);
                     UpdateGapResult(result, stImage.nFrameNum);
                 }
@@ -664,6 +676,10 @@ namespace SimpleView_DepthToPointCloud
                         depthLine = zValues;
                     }
 
+                                                            // 计算当前原始深度差值
+                    ComputeRawDiffMm(depthLine);
+
+                                        // 用 ProcessDepthLine 内部补偿后的范围数据显示
                     GapDetector.GapResult result = m_gapDetector.ProcessDepthLine(depthLine, (int)stImage.nWidth);
                     UpdateGapResult(result, stImage.nFrameNum);
                 }
@@ -678,104 +694,7 @@ namespace SimpleView_DepthToPointCloud
             }
         }
 
-        /// <summary>
-        /// 从深度图原始像素值中提取最上层（最小值）和最下层（最大值），
-        /// 并更新到状态信息面板的文字中
-        /// </summary>
-        private void UpdateDepthMinMaxLabel(MV3D_LP_IMAGE_DATA stImage)
-        {
-            if (stImage.pData == IntPtr.Zero || stImage.nDataLen == 0 || stImage.nWidth == 0)
-            {
-                lblDepthMinMax.Text = "深度最值: --";
-                return;
-            }
-
-            try
-            {
-                // 根据数据长度自动判断格式
-                int pixelCount = (int)(stImage.nWidth * stImage.nHeight);
-                if (pixelCount <= 0)
-                {
-                    lblDepthMinMax.Text = "深度最值: --";
-                    return;
-                }
-
-                if (stImage.nDataLen >= pixelCount * 2)
-                {
-                    // 16位 short 深度数据（深度图/轮廓图/原始图等）
-                    byte[] buffer = new byte[pixelCount * 2];
-                    Marshal.Copy(stImage.pData, buffer, 0, pixelCount * 2);
-
-                    short minVal = short.MaxValue;
-                    short maxVal = short.MinValue;
-                    int validCount = 0;
-
-                    for (int i = 0; i < pixelCount; i++)
-                    {
-                        short depthVal = BitConverter.ToInt16(buffer, i * 2);
-                        if (depthVal > 0)
-                        {
-                            if (depthVal < minVal) minVal = depthVal;
-                            if (depthVal > maxVal) maxVal = depthVal;
-                            validCount++;
-                        }
-                    }
-
-                    if (validCount > 0)
-                    {
-                        lblDepthMinMax.Text = string.Format(
-                            "原始值: min={0}  max={1}  差={2}  (÷100后差={3:F2}mm)",
-                            minVal, maxVal, maxVal - minVal, (maxVal - minVal) / 100f);
-                    }
-                    else
-                    {
-                        lblDepthMinMax.Text = "深度范围: 无有效数据";
-                    }
-                }
-                else if (stImage.nDataLen >= pixelCount * 12)
-                {
-                    // 点云数据（每点3个float: X,Y,Z）
-                    int byteCount = (int)stImage.nDataLen;
-                    byte[] pcBuffer = new byte[byteCount];
-                    Marshal.Copy(stImage.pData, pcBuffer, 0, byteCount);
-
-                    float minZ = float.MaxValue;
-                    float maxZ = float.MinValue;
-                    int validCount = 0;
-
-                    for (int i = 0; i < pixelCount; i++)
-                    {
-                        float z = BitConverter.ToSingle(pcBuffer, (i * 3 + 2) * 4);
-                        if (!float.IsNaN(z) && !float.IsInfinity(z))
-                        {
-                            if (z < minZ) minZ = z;
-                            if (z > maxZ) maxZ = z;
-                            validCount++;
-                        }
-                    }
-
-                    if (validCount > 0)
-                    {
-                        float diff = Math.Abs(maxZ - minZ);
-                        lblDepthMinMax.Text = string.Format("深度范围: 上层={0:F2}mm  下层={1:F2}mm  差值={2:F2}mm", minZ, maxZ, diff);
-                    }
-                    else
-                    {
-                        lblDepthMinMax.Text = "深度范围: 无有效数据";
-                    }
-                }
-                else
-                {
-                    lblDepthMinMax.Text = "深度范围: 当前模式不支持";
-                }
-            }
-            catch
-            {
-                lblDepthMinMax.Text = "深度范围: 读取异常";
-            }
-        }
-
-        private void UpdateGapResult(GapDetector.GapResult result, uint frameNum)
+                        private void UpdateGapResult(GapDetector.GapResult result, uint frameNum)
         {
             m_lastGapResult = result;
 
@@ -803,10 +722,39 @@ namespace SimpleView_DepthToPointCloud
                 lblGapInfo.Text = string.Format("匝数:{0}  {1}", result.InferredTurn, defectStr);
                 lblMadValue.Text = string.Format("MAD Z值: {0:F2}  (阈值: {1:F1})",
                     result.ModifiedZScore, m_gapDetector.ThresholdZ);
+
+                                // ── 显示深度差值（有基准时显示相对线高）──
+                if (m_hasBaseline)
+                {
+                    float relDiffMm = m_currentRawDiffMm - m_baselineDiffMm;
+                    lblDepthMinMax.Text = string.Format(
+                        "基准: {0:F2}mm  当前: {1:F2}mm  线高: {2:F2}mm",
+                        m_baselineDiffMm, m_currentRawDiffMm, relDiffMm);
+                }
+                else
+                {
+                    lblDepthMinMax.Text = string.Format(
+                        "深度差值: {0:F2}mm  (空筒时点校准)", m_currentRawDiffMm);
+                }
+
+
             }
-            else
+                        else
             {
                 lblGapInfo.Text = "缝隙检测: 数据不足";
+                // 仍更新深度差值显示
+                if (m_hasBaseline)
+                {
+                    float relDiffMm = m_currentRawDiffMm - m_baselineDiffMm;
+                    lblDepthMinMax.Text = string.Format(
+                        "基准: {0:F2}mm  当前: {1:F2}mm  线高: {2:F2}mm",
+                        m_baselineDiffMm, m_currentRawDiffMm, relDiffMm);
+                }
+                else
+                {
+                    lblDepthMinMax.Text = string.Format(
+                        "深度差值: {0:F2}mm  (空筒时点校准)", m_currentRawDiffMm);
+                }
             }
         }
 
@@ -965,8 +913,28 @@ namespace SimpleView_DepthToPointCloud
         }
 
                 /// <summary>
-        /// 校准基准（空筒）：抓取当前一帧，平滑后存入 GapDetector 作为基准线。
-        /// 后续所有深度值都会减去这条基准线，使高差从0开始。
+        /// 从 depthLine 中计算当前原始差值（mm），存入 m_currentRawDiffMm
+        /// </summary>
+        private void ComputeRawDiffMm(short[] depthLine)
+        {
+            short minD = short.MaxValue;
+            short maxD = short.MinValue;
+            bool found = false;
+            for (int i = 0; i < depthLine.Length; i++)
+            {
+                short v = depthLine[i];
+                if (v > 0)
+                {
+                    if (v < minD) minD = v;
+                    if (v > maxD) maxD = v;
+                    found = true;
+                }
+            }
+            m_currentRawDiffMm = found ? (maxD - minD) / 100f : 0f;
+        }
+
+        /// <summary>
+        /// 校准基准：记录当前原始差值（空筒弧面），后续减掉它得到相对线高
         /// </summary>
         private void BtnCalibrate_Click(object sender, EventArgs e)
         {
@@ -976,35 +944,14 @@ namespace SimpleView_DepthToPointCloud
                 return;
             }
 
-            // 抓当前一帧做基准
-            MV3D_LP_IMAGE_DATA stImage = new MV3D_LP_IMAGE_DATA();
-            int nRet = Mv3dLpSDK.MV3D_LP_GetImage(m_handle, stImage, 1000);
-            if (nRet != 0)
-            {
-                lblStatus.Text = "校准失败：无法获取图像";
-                return;
-            }
-
-            int pixelCount = (int)(stImage.nWidth * stImage.nHeight);
-            byte[] buffer = new byte[pixelCount * 2];
-            Marshal.Copy(stImage.pData, buffer, 0, pixelCount * 2);
-
-            short[] depthValues = new short[pixelCount];
-            for (int i = 0; i < pixelCount; i++)
-                depthValues[i] = BitConverter.ToInt16(buffer, i * 2);
-
-            short[] depthLine = stImage.nHeight > 1
-                ? GapDetector.ExtractDepthLineAvg(depthValues,
-                    (int)stImage.nWidth, (int)stImage.nHeight,
-                    (int)stImage.nHeight / 2, halfWindow: 2)
-                : depthValues;
-
-            m_gapDetector.CalibrateBaseline(depthLine, (int)stImage.nWidth);
-            lblStatus.Text = string.Format("✓ 基准校准完成  有效点:{0}",
-                depthLine.Count(v => v > 0));
+            // 用当前帧的 depthLine 计算差值作为基准
+            // ProcessAnomalyDetection 每帧会更新 m_currentRawDiffMm
+            m_baselineDiffMm = m_currentRawDiffMm;
+            m_hasBaseline = true;
+            lblStatus.Text = string.Format("✓ 基准校准完成  基准差值: {0:F2}mm", m_baselineDiffMm);
         }
 
-        private void MainForm_FormClosing(object sender, FormClosingEventArgs e)
+                        private void MainForm_FormClosing(object sender, FormClosingEventArgs e)
         {
             StopAcquisition();
             if (m_snapshotImage != null)
