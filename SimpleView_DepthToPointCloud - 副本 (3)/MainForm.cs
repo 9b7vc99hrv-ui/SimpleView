@@ -25,6 +25,10 @@ namespace SimpleView_DepthToPointCloud
         private ComboBox cmbImageMode;
 
         // 控件 - 左侧（输入参数）
+        private Label lblLineWidth;
+        private Label lblLineHeight;
+        private Label lblTurnsPerLayer;
+        private Label lblLayerCount;
         private NumericUpDown nudLineWidth;
         private NumericUpDown nudLineHeight;
         private NumericUpDown nudTurnsPerLayer;
@@ -47,22 +51,19 @@ namespace SimpleView_DepthToPointCloud
         private bool m_hasAnomaly = false;
         private Bitmap m_snapshotImage = null;
         private int m_anomalyFrameNum = 0;
-        private int m_consecutiveAnomalyFrames = 0;
-        private const int ANOMALY_TRIGGER_THRESHOLD = 3;
 
-        // 单位参数
+                // 单位参数
         private float m_fCoordXUnit = 0.02f;
 
-        // 当前帧原始深度数据（用于校准和调试）
-        private float[] m_lastSmoothedData = null;
-        private int m_lastWidth = 0;
-        private uint m_lastFrameNum = 0;
+                // 空筒基准差值
+        private float m_baselineDiffMm = 0f;
+        private bool m_hasBaseline = false;
+
+        // 当前帧原始深度差值（mm）
+        private float m_currentRawDiffMm = 0f;
 
         // 深度最值
         private Label lblDepthMinMax;
-
-        // 调试按钮
-        private Button btnDebug;
 
         enum Mv3dLpImageMode
         {
@@ -98,7 +99,7 @@ namespace SimpleView_DepthToPointCloud
         private void InitializeCustomControls()
         {
             // ============================================================
-            // 左侧区域（原有控件）
+            // 左侧区域（原有控件 - 完全保留不动）
             // ============================================================
 
             // === 左侧：设备控制面板 ===
@@ -136,6 +137,7 @@ namespace SimpleView_DepthToPointCloud
             // === 左侧：输入参数（先验知识） ===
             GroupBox groupParams = new GroupBox { Text = "输入参数（先验知识）", Left = 12, Top = 320, Width = 280, Height = 110 };
 
+            // 第一行：线宽 d + 每层匝数 N
             Label lblWd = new Label { Text = "线宽 d (mm):", Left = 8, Top = 25, Width = 78 };
             groupParams.Controls.Add(lblWd);
             nudLineWidth = new NumericUpDown { Left = 88, Top = 23, Width = 60, Minimum = 0.01M, Maximum = 100M, Value = 4.10M, DecimalPlaces = 2 };
@@ -146,6 +148,7 @@ namespace SimpleView_DepthToPointCloud
             nudTurnsPerLayer = new NumericUpDown { Left = 229, Top = 23, Width = 42, Minimum = 1, Maximum = 999, Value = 8 };
             groupParams.Controls.Add(nudTurnsPerLayer);
 
+            // 第二行：线高 h + 总层数 L
             Label lblHt = new Label { Text = "线高 h (mm):", Left = 8, Top = 55, Width = 78 };
             groupParams.Controls.Add(lblHt);
             nudLineHeight = new NumericUpDown { Left = 88, Top = 53, Width = 60, Minimum = 0.01M, Maximum = 100M, Value = 1.70M, DecimalPlaces = 2 };
@@ -159,47 +162,31 @@ namespace SimpleView_DepthToPointCloud
             this.Controls.Add(groupParams);
 
             // === 左侧：状态信息 ===
-            GroupBox groupStatus = new GroupBox { Text = "状态信息", Left = 12, Top = 430, Width = 280, Height = 240 };
+            GroupBox groupStatus = new GroupBox { Text = "状态信息", Left = 12, Top = 430, Width = 280, Height = 210 };
             lblStatus = new Label { Text = "就绪", Left = 10, Top = 20, Width = 255, Height = 25 };
             groupStatus.Controls.Add(lblStatus);
             lblFrameInfo = new Label { Text = "", Left = 10, Top = 48, Width = 255, Height = 25 };
             groupStatus.Controls.Add(lblFrameInfo);
             lblGapInfo = new Label { Text = "缝隙检测: 未启动", Left = 10, Top = 76, Width = 255, Height = 25 };
             groupStatus.Controls.Add(lblGapInfo);
-            lblMadValue = new Label { Text = "检测状态: --", Left = 10, Top = 104, Width = 255, Height = 25 };
+            lblMadValue = new Label { Text = "MAD Z值: --", Left = 10, Top = 104, Width = 255, Height = 25 };
             groupStatus.Controls.Add(lblMadValue);
-            lblDepthMinMax = new Label { Text = "层数/匝数: --", Left = 10, Top = 132, Width = 255, Height = 25 };
-            groupStatus.Controls.Add(lblDepthMinMax);
+                                                lblDepthMinMax = new Label { Text = "深度最值: --", Left = 10, Top = 132, Width = 255, Height = 25 };
+                                                groupStatus.Controls.Add(lblDepthMinMax);
 
-            // 空筒基准校准按钮
-            Button btnCalibrate = new Button
-            {
-                Text = "校准基准（空筒）",
-                Left = 10,
-                Top = 165,
-                Width = 120,
-                Height = 30,
-                BackColor = Color.FromArgb(0, 120, 215),
-                ForeColor = Color.White
-            };
-            btnCalibrate.Click += BtnCalibrate_Click;
-            groupStatus.Controls.Add(btnCalibrate);
+                                                // ── 空筒基准校准按钮 ──
+                                                Button btnCalibrate = new Button
+                                                {
+                                                    Text = "校准基准（空筒）",
+                                                    Left = 10, Top = 160,
+                                                    Width = 255, Height = 30,
+                                                    BackColor = Color.FromArgb(0, 120, 215),
+                                                    ForeColor = Color.White
+                                                };
+                                                btnCalibrate.Click += BtnCalibrate_Click;
+                                                groupStatus.Controls.Add(btnCalibrate);
 
-            // 调试按钮
-            btnDebug = new Button
-            {
-                Text = "调试：分析深度数据",
-                Left = 140,
-                Top = 165,
-                Width = 130,
-                Height = 30,
-                BackColor = Color.FromArgb(60, 60, 60),
-                ForeColor = Color.White
-            };
-            btnDebug.Click += BtnDebug_Click;
-            groupStatus.Controls.Add(btnDebug);
-
-            this.Controls.Add(groupStatus);
+                                                this.Controls.Add(groupStatus);
 
             // === 左侧：深度图像显示区域 ===
             GroupBox groupDisplay = new GroupBox { Text = "深度图像显示", Left = 305, Top = 12, Width = 700, Height = 598 };
@@ -265,13 +252,14 @@ namespace SimpleView_DepthToPointCloud
 
             this.Controls.Add(groupChart);
 
-            // 定时器轮询
-            m_pollTimer = new Timer { Interval = 100 };
+            // === 定时器轮询 ===
+            m_pollTimer = new Timer { Interval = 50 };
             m_pollTimer.Tick += PollTimer_Tick;
         }
 
         private void BtnRefresh_Click(object sender, EventArgs e)
         {
+            // 点击刷新设备 → 重启整个应用程序
             StopAcquisition();
             if (m_snapshotImage != null)
             {
@@ -431,19 +419,14 @@ namespace SimpleView_DepthToPointCloud
                 lblStatus.Text = "采集中...";
                 cmbImageMode.Enabled = false;
 
-                // 重置状态
                 m_madHistory.Clear();
                 m_lastGapResult = null;
                 m_hasAnomaly = false;
-                m_consecutiveAnomalyFrames = 0;
                 if (m_snapshotImage != null)
                 {
                     m_snapshotImage.Dispose();
                     m_snapshotImage = null;
                 }
-
-                // 同步参数到检测器
-                SyncParametersToDetector();
 
                 m_pollTimer.Start();
             }
@@ -458,11 +441,15 @@ namespace SimpleView_DepthToPointCloud
             }
         }
 
-        private void StopAcquisition()
+                private void StopAcquisition()
         {
             m_pollTimer.Stop();
             m_bExitMain = true;
             m_bMeasuring = false;
+
+                        // 停止时清除基准线
+                        m_hasBaseline = false;
+                        m_baselineDiffMm = 0f;
 
             if (m_handle != IntPtr.Zero)
             {
@@ -476,16 +463,8 @@ namespace SimpleView_DepthToPointCloud
             cmbImageMode.Enabled = true;
 
             lblGapInfo.Text = "缝隙检测: 已停止";
-            lblMadValue.Text = "检测状态: --";
-            lblDepthMinMax.Text = "层数/匝数: --";
-        }
-
-        private void SyncParametersToDetector()
-        {
-            m_gapDetector.WireWidth = (float)nudLineWidth.Value;
-            m_gapDetector.WireHeight = (float)nudLineHeight.Value;
-            m_gapDetector.TurnsPerLayer = (int)nudTurnsPerLayer.Value;
-            m_gapDetector.TotalLayers = (int)nudLayerCount.Value;
+            lblMadValue.Text = "MAD Z值: --";
+            lblDepthMinMax.Text = "深度最值: --";
         }
 
         private void PollTimer_Tick(object sender, EventArgs e)
@@ -503,18 +482,26 @@ namespace SimpleView_DepthToPointCloud
 
                 if (0 == nRet)
                 {
-                    m_lastFrameNum = stImage.nFrameNum;
+                                                                                lblFrameInfo.Text = string.Format("帧号: {0}  尺寸: {1} x {2}  数据长度: {3}  类型: {4}",
+    stImage.nFrameNum, stImage.nWidth, stImage.nHeight, stImage.nDataLen, stImage.enImageType);
 
-                    lblFrameInfo.Text = string.Format("帧号: {0}  尺寸: {1} x {2}  数据长度: {3}  类型: {4}",
-                        stImage.nFrameNum, stImage.nWidth, stImage.nHeight, stImage.nDataLen, stImage.enImageType);
-
+                    // ============================================================
                     // 同步UI参数到检测器
-                    SyncParametersToDetector();
+                    // ============================================================
+                    m_gapDetector.WireWidth = (float)nudLineWidth.Value;
+                    m_gapDetector.WireHeight = (float)nudLineHeight.Value;
+                    m_gapDetector.TurnsPerLayer = (int)nudTurnsPerLayer.Value;
+                    m_gapDetector.TotalLayers = (int)nudLayerCount.Value;
 
-                    // 在 DisplayImage 之前做缝隙检测
+                    // ============================================================
+                    // ★ 在 DisplayImage 之前做缝隙检测，避免 SDK 显示函数
+                    //    可能修改 pData 缓冲区内容导致数据异常 ★
+                    // ============================================================
                     ProcessAnomalyDetection(stImage);
 
+                    // ============================================================
                     // 原有逻辑：SDK显示图像
+                    // ============================================================
                     nRet = Mv3dLpSDK.MV3D_LP_DisplayImage(
                         stImage,
                         pictureBoxDepth.Handle,
@@ -532,12 +519,14 @@ namespace SimpleView_DepthToPointCloud
                         lblStatus.Text = "采集中 - 接收正常";
                     }
 
-                    // 更新右侧UI
+                    // ============================================================
+                    // 新增逻辑：更新右侧UI
+                    // ============================================================
                     UpdateRightPanel();
                 }
                 else if (nRet == unchecked((int)0x80060006))
                 {
-                    // MV3D_LP_E_NODATA：暂无新数据，属于正常情况
+                    // MV3D_LP_E_NODATA：暂无新数据，属于正常情况，不显示错误
                 }
                 else if (nRet != 1)
                 {
@@ -557,6 +546,7 @@ namespace SimpleView_DepthToPointCloud
 
             try
             {
+                // 先判断当前图像类型
                 int pixelCount = (int)(stImage.nWidth * stImage.nHeight);
                 if (pixelCount <= 0)
                 {
@@ -564,90 +554,139 @@ namespace SimpleView_DepthToPointCloud
                     return;
                 }
 
-                short[] depthValues = null;
-                int width = (int)stImage.nWidth;
-                int height = (int)stImage.nHeight;
-
-                // 解析深度数据
-                if (stImage.enImageType == Mv3dLpSDK.ImageType_Depth)
+                                if (stImage.enImageType == Mv3dLpSDK.ImageType_Depth)
                 {
-                    if (stImage.nDataLen < pixelCount * 2) return;
-                    byte[] buffer = new byte[pixelCount * 2];
-                    Marshal.Copy(stImage.pData, buffer, 0, pixelCount * 2);
-                    depthValues = new short[pixelCount];
-                    for (int i = 0; i < pixelCount; i++)
+                    // 深度图：直接解析 short 深度值（原始值÷100=毫米），不调用 MapDepthToPointCloud
+                    int pixelCountDepth = (int)(stImage.nWidth * stImage.nHeight);
+                    if (pixelCountDepth <= 0 || stImage.nDataLen < pixelCountDepth * 2)
+                    {
+                        lblGapInfo.Text = "深度图数据格式异常";
+                        return;
+                    }
+
+                    byte[] buffer = new byte[pixelCountDepth * 2];
+                    Marshal.Copy(stImage.pData, buffer, 0, pixelCountDepth * 2);
+
+                    short[] depthValues = new short[pixelCountDepth];
+                    for (int i = 0; i < pixelCountDepth; i++)
                     {
                         depthValues[i] = BitConverter.ToInt16(buffer, i * 2);
                     }
+
+                    short[] depthLine;
+                    if (stImage.nHeight > 1)
+                    {
+                        depthLine = GapDetector.ExtractDepthLineAvg(depthValues,
+                            (int)stImage.nWidth, (int)stImage.nHeight,
+                            (int)stImage.nHeight / 2, halfWindow: 2);
+                    }
+                    else
+                    {
+                        depthLine = depthValues;
+                    }
+
+                                                            // 计算当前原始深度差值
+                    ComputeRawDiffMm(depthLine);
+
+                                        // 用 ProcessDepthLine 内部补偿后的范围数据显示
+                    GapDetector.GapResult result = m_gapDetector.ProcessDepthLine(depthLine, (int)stImage.nWidth);
+                    UpdateGapResult(result, stImage.nFrameNum);
                 }
                 else if (stImage.nDataLen >= pixelCount * 2 && stImage.nDataLen < pixelCount * 12)
                 {
-                    if (stImage.nDataLen < pixelCount * 2) return;
+                    // 轮廓图/原始图等 short 格式：直接解析深度值做缝隙检测
+                    if (stImage.nDataLen < pixelCount * 2)
+                    {
+                        lblGapInfo.Text = "数据格式异常";
+                        return;
+                    }
+
                     byte[] buffer = new byte[pixelCount * 2];
                     Marshal.Copy(stImage.pData, buffer, 0, pixelCount * 2);
-                    depthValues = new short[pixelCount];
+
+                    short[] depthValues = new short[pixelCount];
                     for (int i = 0; i < pixelCount; i++)
                     {
                         depthValues[i] = BitConverter.ToInt16(buffer, i * 2);
                     }
+
+                    short[] depthLine;
+                    if (stImage.nHeight > 1)
+                    {
+                        depthLine = GapDetector.ExtractDepthLineAvg(depthValues,
+                            (int)stImage.nWidth, (int)stImage.nHeight,
+                            (int)stImage.nHeight / 2, halfWindow: 2);
+                    }
+                    else
+                    {
+                        depthLine = depthValues;
+                    }
+
+                                                            // 计算当前原始深度差值
+                    ComputeRawDiffMm(depthLine);
+
+                                        // 用 ProcessDepthLine 内部补偿后的范围数据显示
+                    GapDetector.GapResult result = m_gapDetector.ProcessDepthLine(depthLine, (int)stImage.nWidth);
+                    UpdateGapResult(result, stImage.nFrameNum);
                 }
                 else if (stImage.nDataLen >= pixelCount * 12)
                 {
+                    // 直接是点云数据
                     byte[] pcBuffer = new byte[(int)stImage.nDataLen];
                     Marshal.Copy(stImage.pData, pcBuffer, 0, (int)stImage.nDataLen);
+
                     int pointCount = (int)stImage.nDataLen / 4;
                     float[] pcData = new float[pointCount];
                     for (int i = 0; i < pointCount; i++)
                     {
                         pcData[i] = BitConverter.ToSingle(pcBuffer, i * 4);
                     }
+
                     int totalPoints = (int)(stImage.nWidth * stImage.nHeight);
-                    if (totalPoints <= 0 || pointCount < totalPoints * 3) return;
-                    depthValues = new short[totalPoints];
+                    if (totalPoints <= 0 || pointCount < totalPoints * 3)
+                    {
+                        lblGapInfo.Text = "点云数据格式异常";
+                        return;
+                    }
+
+                    short[] zValues = new short[totalPoints];
                     for (int i = 0; i < totalPoints; i++)
                     {
                         float z = pcData[i * 3 + 2];
                         if (float.IsNaN(z) || float.IsInfinity(z) || z <= -99999 || z >= 99999)
-                            depthValues[i] = 0;
+                            zValues[i] = 0;
                         else
                         {
                             double zScaled = z * 100;
-                            if (zScaled > 32767) depthValues[i] = 32767;
-                            else if (zScaled < -32768) depthValues[i] = -32768;
-                            else depthValues[i] = (short)zScaled;
+                            if (zScaled > 32767) zValues[i] = 32767;
+                            else if (zScaled < -32768) zValues[i] = -32768;
+                            else zValues[i] = (short)zScaled;
                         }
                     }
+
+                    short[] depthLine;
+                    if (stImage.nHeight > 1)
+                    {
+                        depthLine = GapDetector.ExtractDepthLineAvg(zValues,
+                            (int)stImage.nWidth, (int)stImage.nHeight,
+                            (int)stImage.nHeight / 2, halfWindow: 2);
+                    }
+                    else
+                    {
+                        depthLine = zValues;
+                    }
+
+                                                            // 计算当前原始深度差值
+                    ComputeRawDiffMm(depthLine);
+
+                                        // 用 ProcessDepthLine 内部补偿后的范围数据显示
+                    GapDetector.GapResult result = m_gapDetector.ProcessDepthLine(depthLine, (int)stImage.nWidth);
+                    UpdateGapResult(result, stImage.nFrameNum);
                 }
                 else
                 {
                     lblGapInfo.Text = "不支持的图像类型用于缝隙检测";
-                    return;
                 }
-
-                if (depthValues == null) return;
-
-                // 提取中心行数据（多行平均）
-                short[] depthLine;
-                if (height > 1)
-                {
-                    depthLine = GapDetector.ExtractDepthLineAvg(depthValues, width, height, height / 2, halfWindow: 2);
-                }
-                else
-                {
-                    depthLine = depthValues;
-                }
-
-                // 预处理并缓存 smoothed 数据（用于校准和调试）
-                float[] smoothed = PreprocessForDetection(depthLine, width);
-                if (smoothed != null)
-                {
-                    m_lastSmoothedData = smoothed;
-                    m_lastWidth = width;
-                }
-
-                // 执行检测
-                GapDetector.GapResult result = m_gapDetector.ProcessDepthLine(depthLine, width);
-                UpdateGapResult(result, stImage.nFrameNum);
             }
             catch (Exception ex)
             {
@@ -655,133 +694,67 @@ namespace SimpleView_DepthToPointCloud
             }
         }
 
-        private float[] PreprocessForDetection(short[] depthData, int width)
-        {
-            float[] result = new float[width];
-            int validCount = 0;
-
-            for (int i = 0; i < width; i++)
-            {
-                if (depthData[i] > 0)
-                {
-                    result[i] = depthData[i];
-                    validCount++;
-                }
-                else
-                {
-                    result[i] = -1;
-                }
-            }
-
-            if (validCount < 20)
-                return null;
-
-            float[] smoothed = new float[width];
-            for (int i = 0; i < width; i++)
-            {
-                if (result[i] < 0)
-                {
-                    smoothed[i] = -1;
-                    continue;
-                }
-
-                List<float> window = new List<float>();
-                for (int j = -1; j <= 1; j++)
-                {
-                    int idx = i + j;
-                    if (idx >= 0 && idx < width && result[idx] > 0)
-                        window.Add(result[idx]);
-                }
-                if (window.Count > 0)
-                {
-                    window.Sort();
-                    smoothed[i] = window[window.Count / 2];
-                }
-                else
-                {
-                    smoothed[i] = result[i];
-                }
-            }
-
-            return smoothed;
-        }
-
-        private void UpdateGapResult(GapDetector.GapResult result, uint frameNum)
+                        private void UpdateGapResult(GapDetector.GapResult result, uint frameNum)
         {
             m_lastGapResult = result;
 
             if (result.HasValidData)
             {
-                // MAD历史记录
                 m_madHistory.Add(result.ModifiedZScore);
                 if (m_madHistory.Count > MAX_MAD_HISTORY)
                 {
                     m_madHistory.RemoveAt(0);
                 }
 
-                // 连续异常帧计数
                 if (result.IsAnomaly)
                 {
-                    m_consecutiveAnomalyFrames++;
-                    lblMadValue.ForeColor = Color.Red;
-
-                    // 连续3帧异常触发截图
-                    if (m_consecutiveAnomalyFrames >= ANOMALY_TRIGGER_THRESHOLD && !m_hasAnomaly)
+                    if (!m_hasAnomaly || m_anomalyFrameNum != frameNum)
                     {
                         m_hasAnomaly = true;
                         m_anomalyFrameNum = (int)frameNum;
                         CaptureSnapshot();
+                    }
+                }
 
-                        // 显示异常原因
-                        string reasons = result.AnomalyReasons.Count > 0
-                            ? string.Join(" | ", result.AnomalyReasons)
-                            : "未知异常";
-                        lblSnapStatus.Text = $"⚠️ 异常触发 (连续{m_consecutiveAnomalyFrames}帧) | {reasons}";
-                        lblSnapStatus.ForeColor = Color.Red;
-                    }
+                string defectStr = result.Defects.Count == 0
+                    ? "正常"
+                    : string.Join(" | ", result.Defects.ConvertAll(d => d.Message));
+                lblGapInfo.Text = string.Format("匝数:{0}  {1}", result.InferredTurn, defectStr);
+                lblMadValue.Text = string.Format("MAD Z值: {0:F2}  (阈值: {1:F1})",
+                    result.ModifiedZScore, m_gapDetector.ThresholdZ);
 
-                    // 显示当前异常原因
-                    if (result.AnomalyReasons.Count > 0)
-                    {
-                        lblMadValue.Text = $"异常: {result.AnomalyReasons[0]}";
-                    }
-                    else
-                    {
-                        lblMadValue.Text = $"检测状态: 异常 (连续{m_consecutiveAnomalyFrames}帧)";
-                    }
+                                // ── 显示深度差值（有基准时显示相对线高）──
+                if (m_hasBaseline)
+                {
+                    float relDiffMm = m_currentRawDiffMm - m_baselineDiffMm;
+                    lblDepthMinMax.Text = string.Format(
+                        "基准: {0:F2}mm  当前: {1:F2}mm  线高: {2:F2}mm",
+                        m_baselineDiffMm, m_currentRawDiffMm, relDiffMm);
                 }
                 else
                 {
-                    // 任意一帧正常，重置计数
-                    m_consecutiveAnomalyFrames = 0;
-                    m_hasAnomaly = false;
-                    lblMadValue.ForeColor = Color.Green;
-                    lblMadValue.Text = "检测状态: 正常";
+                    lblDepthMinMax.Text = string.Format(
+                        "深度差值: {0:F2}mm  (空筒时点校准)", m_currentRawDiffMm);
                 }
 
-                // 显示层数和匝数信息
-                string statusText = result.IsAnomaly ? "⚠️ 异常" : "✓ 正常";
-                string layerText = result.CurrentLayer >= 0 ? $"第{result.CurrentLayer + 1}层" : "层数未知";
-                string completeText = result.IsLayerCompleted ? "已完成" : "绕制中";
 
-                lblGapInfo.Text = $"{layerText} | {completeText} | {statusText}";
-
-                // 匝数显示
-                if (result.InferredTurn == 0)
-                {
-                    lblDepthMinMax.Text = $"匝数: 未检测到 (帧{frameNum})";
-                    lblDepthMinMax.ForeColor = Color.Orange;
-                }
-                else
-                {
-                    lblDepthMinMax.Text = $"匝数: {result.InferredTurn} / {m_gapDetector.TurnsPerLayer}";
-                    lblDepthMinMax.ForeColor = result.InferredTurn == m_gapDetector.TurnsPerLayer ? Color.White : Color.Yellow;
-                }
             }
-            else
+                        else
             {
                 lblGapInfo.Text = "缝隙检测: 数据不足";
-                lblDepthMinMax.Text = $"匝数: 无数据";
+                // 仍更新深度差值显示
+                if (m_hasBaseline)
+                {
+                    float relDiffMm = m_currentRawDiffMm - m_baselineDiffMm;
+                    lblDepthMinMax.Text = string.Format(
+                        "基准: {0:F2}mm  当前: {1:F2}mm  线高: {2:F2}mm",
+                        m_baselineDiffMm, m_currentRawDiffMm, relDiffMm);
+                }
+                else
+                {
+                    lblDepthMinMax.Text = string.Format(
+                        "深度差值: {0:F2}mm  (空筒时点校准)", m_currentRawDiffMm);
+                }
             }
         }
 
@@ -821,19 +794,13 @@ namespace SimpleView_DepthToPointCloud
             if (m_hasAnomaly && m_snapshotImage != null)
             {
                 pictureBoxSnap.Image = m_snapshotImage;
+                lblSnapStatus.Text = string.Format("异常定格 | 帧号: {0}", m_anomalyFrameNum);
+                lblSnapStatus.ForeColor = Color.Red;
             }
-            else if (!m_hasAnomaly && m_consecutiveAnomalyFrames == 0)
+            else if (!m_hasAnomaly)
             {
-                // 不覆盖异常状态
-                if (lblSnapStatus.Text.Contains("异常"))
-                {
-                    // 保持异常显示
-                }
-                else
-                {
-                    lblSnapStatus.Text = "正常 - 等待异常...";
-                    lblSnapStatus.ForeColor = Color.Gray;
-                }
+                lblSnapStatus.Text = "正常 - 等待异常...";
+                lblSnapStatus.ForeColor = Color.Gray;
             }
 
             DrawMadChart();
@@ -945,6 +912,30 @@ namespace SimpleView_DepthToPointCloud
             pictureBoxMadChart.Image = bmp;
         }
 
+                /// <summary>
+        /// 从 depthLine 中计算当前原始差值（mm），存入 m_currentRawDiffMm
+        /// </summary>
+        private void ComputeRawDiffMm(short[] depthLine)
+        {
+            short minD = short.MaxValue;
+            short maxD = short.MinValue;
+            bool found = false;
+            for (int i = 0; i < depthLine.Length; i++)
+            {
+                short v = depthLine[i];
+                if (v > 0)
+                {
+                    if (v < minD) minD = v;
+                    if (v > maxD) maxD = v;
+                    found = true;
+                }
+            }
+            m_currentRawDiffMm = found ? (maxD - minD) / 100f : 0f;
+        }
+
+        /// <summary>
+        /// 校准基准：记录当前原始差值（空筒弧面），后续减掉它得到相对线高
+        /// </summary>
         private void BtnCalibrate_Click(object sender, EventArgs e)
         {
             if (!m_bMeasuring || m_handle == IntPtr.Zero)
@@ -953,118 +944,14 @@ namespace SimpleView_DepthToPointCloud
                 return;
             }
 
-            if (m_lastSmoothedData != null && m_lastWidth > 0)
-            {
-                m_gapDetector.CalibrateBaseline(m_lastSmoothedData, m_fCoordXUnit);
-                lblStatus.Text = "✓ 基准校准完成（空筒基准已记录）";
-                lblStatus.ForeColor = Color.Green;
-            }
-            else
-            {
-                lblStatus.Text = "校准失败: 无有效深度数据";
-                lblStatus.ForeColor = Color.Red;
-            }
+            // 用当前帧的 depthLine 计算差值作为基准
+            // ProcessAnomalyDetection 每帧会更新 m_currentRawDiffMm
+            m_baselineDiffMm = m_currentRawDiffMm;
+            m_hasBaseline = true;
+            lblStatus.Text = string.Format("✓ 基准校准完成  基准差值: {0:F2}mm", m_baselineDiffMm);
         }
 
-        private void BtnDebug_Click(object sender, EventArgs e)
-        {
-            if (m_lastSmoothedData == null || m_lastWidth == 0)
-            {
-                MessageBox.Show("暂无深度数据，请先开始采集", "调试信息",
-                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return;
-            }
-
-            // 分析当前缓存的 smoothed 数据
-            float[] data = m_lastSmoothedData;
-            List<float> validVals = new List<float>();
-            for (int i = 0; i < data.Length; i++)
-            {
-                if (data[i] > 0) validVals.Add(data[i]);
-            }
-
-            if (validVals.Count == 0)
-            {
-                MessageBox.Show("没有有效深度数据", "调试信息",
-                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return;
-            }
-
-            float minVal = validVals.Min();
-            float maxVal = validVals.Max();
-            int minIdx = Array.IndexOf(data, minVal);
-            int maxIdx = Array.IndexOf(data, maxVal);
-
-            // 分析波峰波谷特征
-            int peakCount = 0;
-            int valleyCount = 0;
-            List<int> peaks = new List<int>();
-            List<int> valleys = new List<int>();
-
-            for (int i = 3; i < data.Length - 3; i++)
-            {
-                if (data[i] <= 0) continue;
-
-                // 检测局部最大值（波峰）
-                bool isPeak = data[i] > data[i - 1] && data[i] > data[i + 1] &&
-                              data[i] > data[i - 2] && data[i] > data[i + 2];
-                if (isPeak)
-                {
-                    peakCount++;
-                    peaks.Add(i);
-                }
-
-                // 检测局部最小值（波谷）
-                bool isValley = data[i] < data[i - 1] && data[i] < data[i + 1] &&
-                                data[i] < data[i - 2] && data[i] < data[i + 2];
-                if (isValley)
-                {
-                    valleyCount++;
-                    valleys.Add(i);
-                }
-            }
-
-            // 计算平均间距
-            float avgPeakSpacing = 0, avgValleySpacing = 0;
-            if (peaks.Count >= 2)
-            {
-                float totalSpacing = 0;
-                for (int i = 1; i < peaks.Count; i++)
-                    totalSpacing += (peaks[i] - peaks[i - 1]) * m_fCoordXUnit;
-                avgPeakSpacing = totalSpacing / (peaks.Count - 1);
-            }
-            if (valleys.Count >= 2)
-            {
-                float totalSpacing = 0;
-                for (int i = 1; i < valleys.Count; i++)
-                    totalSpacing += (valleys[i] - valleys[i - 1]) * m_fCoordXUnit;
-                avgValleySpacing = totalSpacing / (valleys.Count - 1);
-            }
-
-            string msg = $"=== 深度数据分析 (帧 {m_lastFrameNum}) ===\n\n" +
-                         $"有效点数: {validVals.Count}/{data.Length}\n" +
-                         $"深度范围: {minVal:F0} ~ {maxVal:F0}\n" +
-                         $"最小值(最高点)位置: X={minIdx}, 值={minVal:F0}\n" +
-                         $"最大值(最低点)位置: X={maxIdx}, 值={maxVal:F0}\n" +
-                         $"深度跨度: {maxVal - minVal:F0}\n\n" +
-                         $"=== 波峰/波谷统计 ===\n" +
-                         $"检测到的波峰数(局部最大): {peakCount}\n" +
-                         $"波峰平均间距: {avgPeakSpacing:F2} mm\n" +
-                         $"检测到的波谷数(局部最小): {valleyCount}\n" +
-                         $"波谷平均间距: {avgValleySpacing:F2} mm\n\n" +
-                         $"=== 判断建议 ===\n" +
-                         $"预期匝数: {nudTurnsPerLayer.Value}\n" +
-                         $"预期间距: {nudLineWidth.Value} mm\n\n" +
-                         $"根据传感器坐标系:\n" +
-                         $"- 如果线材顶部是【波峰】(局部最大)，匝数 = {peakCount}\n" +
-                         $"- 如果线材顶部是【波谷】(局部最小)，匝数 = {valleyCount}\n\n" +
-                         $"请观察哪个值与预期匝数({nudTurnsPerLayer.Value})和间距({nudLineWidth.Value}mm)更接近！";
-
-            MessageBox.Show(msg, "调试信息 - 请确认线材顶部对应哪种波形",
-                MessageBoxButtons.OK, MessageBoxIcon.Information);
-        }
-
-        private void MainForm_FormClosing(object sender, FormClosingEventArgs e)
+                        private void MainForm_FormClosing(object sender, FormClosingEventArgs e)
         {
             StopAcquisition();
             if (m_snapshotImage != null)
