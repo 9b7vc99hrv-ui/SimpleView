@@ -137,7 +137,7 @@ namespace SimpleView_DepthToPointCloud
 
             Label lblTn = new Label { Text = "每层匝数 N:", Left = 155, Top = 25, Width = 72 };
             groupParams.Controls.Add(lblTn);
-            nudTurnsPerLayer = new NumericUpDown { Left = 229, Top = 23, Width = 42, Minimum = 1, Maximum = 999, Value =  8};
+            nudTurnsPerLayer = new NumericUpDown { Left = 229, Top = 23, Width = 42, Minimum = 1, Maximum = 999, Value = 8 };
             groupParams.Controls.Add(nudTurnsPerLayer);
 
             // 第二行：线高 h + 总层数 L
@@ -237,7 +237,7 @@ namespace SimpleView_DepthToPointCloud
             m_pollTimer.Tick += PollTimer_Tick;
         }
 
-                private void BtnRefresh_Click(object sender, EventArgs e)
+        private void BtnRefresh_Click(object sender, EventArgs e)
         {
             // 点击刷新设备 → 重启整个应用程序
             StopAcquisition();
@@ -458,8 +458,8 @@ namespace SimpleView_DepthToPointCloud
 
                 if (0 == nRet)
                 {
-                    lblFrameInfo.Text = string.Format("帧号: {0}  尺寸: {1} x {2}  数据长度: {3}",
-                        stImage.nFrameNum, stImage.nWidth, stImage.nHeight, stImage.nDataLen);
+                    lblFrameInfo.Text = string.Format("帧号: {0}  尺寸: {1} x {2}  数据长度: {3}  类型: {4}",
+    stImage.nFrameNum, stImage.nWidth, stImage.nHeight, stImage.nDataLen, stImage.enImageType);
 
                     // ============================================================
                     // 原有逻辑：SDK显示图像（完全不动）
@@ -485,6 +485,14 @@ namespace SimpleView_DepthToPointCloud
                     // 新增：在状态信息中显示最上层和最下层数值
                     // ============================================================
                     UpdateDepthMinMaxLabel(stImage);
+
+                    // ============================================================
+                    // 新增逻辑：同步UI参数到检测器
+                    // ============================================================
+                    m_gapDetector.WireWidth = (float)nudLineWidth.Value;
+                    m_gapDetector.WireHeight = (float)nudLineHeight.Value;
+                    m_gapDetector.TurnsPerLayer = (int)nudTurnsPerLayer.Value;
+                    m_gapDetector.TotalLayers = (int)nudLayerCount.Value;
 
                     // ============================================================
                     // 新增逻辑：缝隙检测 + MAD计算
@@ -518,73 +526,82 @@ namespace SimpleView_DepthToPointCloud
 
             try
             {
-                // 从点云数据中提取Z值做缝隙检测
                 // 先判断当前图像类型
+                int pixelCount = (int)(stImage.nWidth * stImage.nHeight);
+                if (pixelCount <= 0)
+                {
+                    lblGapInfo.Text = "缝隙检测: 像素数为0";
+                    return;
+                }
+
                 if (stImage.enImageType == Mv3dLpSDK.ImageType_Depth)
                 {
-                    // 深度图 → 先转成点云，再取Z值
-                    MV3D_LP_IMAGE_DATA stPointCloud = new MV3D_LP_IMAGE_DATA();
-                    int nRet = Mv3dLpSDK.MV3D_LP_MapDepthToPointCloud(stImage, stPointCloud);
-                    if (0 != nRet)
+                    // 深度图：直接解析 short 深度值（原始值÷100=毫米），不调用 MapDepthToPointCloud
+                    int pixelCountDepth = (int)(stImage.nWidth * stImage.nHeight);
+                    if (pixelCountDepth <= 0 || stImage.nDataLen < pixelCountDepth * 2)
                     {
-                        lblGapInfo.Text = string.Format("点云转换失败: 0x{0:x}", nRet);
+                        lblGapInfo.Text = "深度图数据格式异常";
                         return;
                     }
 
-                    // 从点云数据中取Z值
-                    byte[] pcBuffer = new byte[(int)stPointCloud.nDataLen];
-                    Marshal.Copy(stPointCloud.pData, pcBuffer, 0, (int)stPointCloud.nDataLen);
+                    byte[] buffer = new byte[pixelCountDepth * 2];
+                    Marshal.Copy(stImage.pData, buffer, 0, pixelCountDepth * 2);
 
-                    int pointCount = (int)stPointCloud.nDataLen / 4;  // 每个值4字节float
-                    float[] pcData = new float[pointCount];
-                    for (int i = 0; i < pointCount; i++)
+                    short[] depthValues = new short[pixelCountDepth];
+                    for (int i = 0; i < pixelCountDepth; i++)
                     {
-                        pcData[i] = BitConverter.ToSingle(pcBuffer, i * 4);
-                    }
-
-                    // 提取Z值（每个点3个float: X,Y,Z, X,Y,Z...）
-                    int totalPoints = (int)(stPointCloud.nWidth * stPointCloud.nHeight);
-                    if (totalPoints <= 0 || pointCount < totalPoints * 3)
-                    {
-                        lblGapInfo.Text = "点云数据格式异常";
-                        return;
-                    }
-
-                    short[] zValues = new short[totalPoints];
-                    for (int i = 0; i < totalPoints; i++)
-                    {
-                        float z = pcData[i * 3 + 2];
-                        // 将float Z值转为short（保留有效范围）
-                        if (float.IsNaN(z) || float.IsInfinity(z) || z <= -99999 || z >= 99999)
-                            zValues[i] = 0;
-                        else
-                        {
-                            // Z值可能是毫米单位，需要转成适合short的范围
-                            // 乘以100保留两位小数精度
-                            double zScaled = z * 100;
-                            if (zScaled > 32767) zValues[i] = 32767;
-                            else if (zScaled < -32768) zValues[i] = -32768;
-                            else zValues[i] = (short)zScaled;
-                        }
+                        depthValues[i] = BitConverter.ToInt16(buffer, i * 2);
                     }
 
                     short[] depthLine;
-                    if (stPointCloud.nHeight > 1)
+                    if (stImage.nHeight > 1)
                     {
-                        depthLine = GapDetector.ExtractDepthLine(zValues,
-                            (int)stPointCloud.nWidth, (int)stPointCloud.nHeight,
-                            (int)stPointCloud.nHeight / 2);
+                        depthLine = GapDetector.ExtractDepthLineAvg(depthValues,
+                            (int)stImage.nWidth, (int)stImage.nHeight,
+                            (int)stImage.nHeight / 2, halfWindow: 2);
                     }
                     else
                     {
-                        depthLine = zValues;
+                        depthLine = depthValues;
                     }
 
-                    // 用Z值来做缝隙检测
-                    GapDetector.GapResult result = m_gapDetector.ProcessDepthLine(depthLine, (int)stPointCloud.nWidth);
+                    GapDetector.GapResult result = m_gapDetector.ProcessDepthLine(depthLine, (int)stImage.nWidth);
                     UpdateGapResult(result, stImage.nFrameNum);
                 }
-                else if (stImage.enImageType == Mv3dLpSDK.ImageType_PointCloud)
+                else if (stImage.nDataLen >= pixelCount * 2 && stImage.nDataLen < pixelCount * 12)
+                {
+                    // 轮廓图/原始图等 short 格式：直接解析深度值做缝隙检测
+                    if (stImage.nDataLen < pixelCount * 2)
+                    {
+                        lblGapInfo.Text = "数据格式异常";
+                        return;
+                    }
+
+                    byte[] buffer = new byte[pixelCount * 2];
+                    Marshal.Copy(stImage.pData, buffer, 0, pixelCount * 2);
+
+                    short[] depthValues = new short[pixelCount];
+                    for (int i = 0; i < pixelCount; i++)
+                    {
+                        depthValues[i] = BitConverter.ToInt16(buffer, i * 2);
+                    }
+
+                    short[] depthLine;
+                    if (stImage.nHeight > 1)
+                    {
+                        depthLine = GapDetector.ExtractDepthLineAvg(depthValues,
+                            (int)stImage.nWidth, (int)stImage.nHeight,
+                            (int)stImage.nHeight / 2, halfWindow: 2);
+                    }
+                    else
+                    {
+                        depthLine = depthValues;
+                    }
+
+                    GapDetector.GapResult result = m_gapDetector.ProcessDepthLine(depthLine, (int)stImage.nWidth);
+                    UpdateGapResult(result, stImage.nFrameNum);
+                }
+                else if (stImage.nDataLen >= pixelCount * 12)
                 {
                     // 直接是点云数据
                     byte[] pcBuffer = new byte[(int)stImage.nDataLen];
@@ -622,9 +639,9 @@ namespace SimpleView_DepthToPointCloud
                     short[] depthLine;
                     if (stImage.nHeight > 1)
                     {
-                        depthLine = GapDetector.ExtractDepthLine(zValues,
+                        depthLine = GapDetector.ExtractDepthLineAvg(zValues,
                             (int)stImage.nWidth, (int)stImage.nHeight,
-                            (int)stImage.nHeight / 2);
+                            (int)stImage.nHeight / 2, halfWindow: 2);
                     }
                     else
                     {
@@ -659,16 +676,17 @@ namespace SimpleView_DepthToPointCloud
 
             try
             {
-                if (stImage.enImageType == Mv3dLpSDK.ImageType_Depth)
+                // 根据数据长度自动判断格式
+                int pixelCount = (int)(stImage.nWidth * stImage.nHeight);
+                if (pixelCount <= 0)
                 {
-                    // 深度图：每个像素是16位有符号整数（short），原始值÷100=毫米
-                    int pixelCount = (int)(stImage.nWidth * stImage.nHeight);
-                    if (pixelCount <= 0 || stImage.nDataLen < pixelCount * 2)
-                    {
-                        lblDepthMinMax.Text = "深度范围: --";
-                        return;
-                    }
+                    lblDepthMinMax.Text = "深度最值: --";
+                    return;
+                }
 
+                if (stImage.nDataLen >= pixelCount * 2)
+                {
+                    // 16位 short 深度数据（深度图/轮廓图/原始图等）
                     byte[] buffer = new byte[pixelCount * 2];
                     Marshal.Copy(stImage.pData, buffer, 0, pixelCount * 2);
 
@@ -689,42 +707,27 @@ namespace SimpleView_DepthToPointCloud
 
                     if (validCount > 0)
                     {
-                        // 原始值÷100=毫米
-                        float minMm = minVal / 100f;
-                        float maxMm = maxVal / 100f;
-                        float diffMm = (maxVal - minVal) / 100f;
-                        lblDepthMinMax.Text = string.Format("深度范围: 上层={0:F2}mm  下层={1:F2}mm  差值={2:F2}mm", minMm, maxMm, diffMm);
+                        lblDepthMinMax.Text = string.Format(
+                            "原始值: min={0}  max={1}  差={2}  (÷100后差={3:F2}mm)",
+                            minVal, maxVal, maxVal - minVal, (maxVal - minVal) / 100f);
                     }
                     else
                     {
                         lblDepthMinMax.Text = "深度范围: 无有效数据";
                     }
                 }
-                else if (stImage.enImageType == Mv3dLpSDK.ImageType_PointCloud)
+                else if (stImage.nDataLen >= pixelCount * 12)
                 {
-                    // 点云图：读取Z值，找出最大最小Z的差
+                    // 点云数据（每点3个float: X,Y,Z）
                     int byteCount = (int)stImage.nDataLen;
-                    if (byteCount < 12)
-                    {
-                        lblDepthMinMax.Text = "深度最值: --";
-                        return;
-                    }
-
                     byte[] pcBuffer = new byte[byteCount];
                     Marshal.Copy(stImage.pData, pcBuffer, 0, byteCount);
-
-                    int totalPoints = (int)(stImage.nWidth * stImage.nHeight);
-                    if (totalPoints <= 0)
-                    {
-                        lblDepthMinMax.Text = "深度最值: --";
-                        return;
-                    }
 
                     float minZ = float.MaxValue;
                     float maxZ = float.MinValue;
                     int validCount = 0;
 
-                    for (int i = 0; i < totalPoints; i++)
+                    for (int i = 0; i < pixelCount; i++)
                     {
                         float z = BitConverter.ToSingle(pcBuffer, (i * 3 + 2) * 4);
                         if (!float.IsNaN(z) && !float.IsInfinity(z))
@@ -778,8 +781,10 @@ namespace SimpleView_DepthToPointCloud
                     }
                 }
 
-                lblGapInfo.Text = string.Format("缝隙数: {0}  平均间距: {1:F2}mm",
-                    result.GapCount, result.AvgGapMm);
+                string defectStr = result.Defects.Count == 0
+                    ? "正常"
+                    : string.Join(" | ", result.Defects.ConvertAll(d => d.Message));
+                lblGapInfo.Text = string.Format("匝数:{0}  {1}", result.InferredTurn, defectStr);
                 lblMadValue.Text = string.Format("MAD Z值: {0:F2}  (阈值: {1:F1})",
                     result.ModifiedZScore, m_gapDetector.ThresholdZ);
             }
