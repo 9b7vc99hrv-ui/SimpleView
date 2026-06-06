@@ -4,8 +4,6 @@ using System.Drawing;
 using System.Linq;
 using System.Windows.Forms;
 using System.Runtime.InteropServices;
-using System.IO;
-using System.Drawing.Drawing2D;
 
 namespace SimpleView_DepthToPointCloud
 {
@@ -52,9 +50,6 @@ namespace SimpleView_DepthToPointCloud
         private int m_consecutiveAnomalyFrames = 0;
         private const int ANOMALY_TRIGGER_THRESHOLD = 3;
 
-        // 缓存当前帧的深度图像 Bitmap（由深度数据生成）
-        private Bitmap m_currentDepthBitmap = null;
-
         // 单位参数
         private float m_fCoordXUnit = 0.02f;
 
@@ -68,9 +63,6 @@ namespace SimpleView_DepthToPointCloud
 
         // 调试按钮
         private Button btnDebug;
-
-        // 深度图像显示区域 GroupBox（需要作为字段，供截图用）
-        private GroupBox groupDisplay;
 
         enum Mv3dLpImageMode
         {
@@ -146,7 +138,7 @@ namespace SimpleView_DepthToPointCloud
 
             Label lblWd = new Label { Text = "线宽 d (mm):", Left = 8, Top = 25, Width = 78 };
             groupParams.Controls.Add(lblWd);
-            nudLineWidth = new NumericUpDown { Left = 88, Top = 23, Width = 60, Minimum = 0.01M, Maximum = 100M, Value = 3.50M, DecimalPlaces = 2 };
+            nudLineWidth = new NumericUpDown { Left = 88, Top = 23, Width = 60, Minimum = 0.01M, Maximum = 100M, Value = 4.10M, DecimalPlaces = 2 };
             groupParams.Controls.Add(nudLineWidth);
 
             Label lblTn = new Label { Text = "每层匝数 N:", Left = 155, Top = 25, Width = 72 };
@@ -210,7 +202,7 @@ namespace SimpleView_DepthToPointCloud
             this.Controls.Add(groupStatus);
 
             // === 左侧：深度图像显示区域 ===
-            groupDisplay = new GroupBox { Text = "深度图像显示", Left = 305, Top = 12, Width = 700, Height = 598 };
+            GroupBox groupDisplay = new GroupBox { Text = "深度图像显示", Left = 305, Top = 12, Width = 700, Height = 598 };
             pictureBoxDepth = new PictureBox
             {
                 Left = 10,
@@ -285,11 +277,6 @@ namespace SimpleView_DepthToPointCloud
             {
                 m_snapshotImage.Dispose();
                 m_snapshotImage = null;
-            }
-            if (m_currentDepthBitmap != null)
-            {
-                m_currentDepthBitmap.Dispose();
-                m_currentDepthBitmap = null;
             }
             Mv3dLpSDK.MV3D_LP_Finalize();
             Application.Restart();
@@ -453,11 +440,6 @@ namespace SimpleView_DepthToPointCloud
                 {
                     m_snapshotImage.Dispose();
                     m_snapshotImage = null;
-                }
-                if (m_currentDepthBitmap != null)
-                {
-                    m_currentDepthBitmap.Dispose();
-                    m_currentDepthBitmap = null;
                 }
 
                 // 同步参数到检测器
@@ -644,9 +626,6 @@ namespace SimpleView_DepthToPointCloud
 
                 if (depthValues == null) return;
 
-                // 用深度数据生成 Bitmap 并缓存（供异常截图使用）
-                GenerateDepthBitmap(depthValues, width, height);
-
                 // 提取中心行数据（多行平均）
                 short[] depthLine;
                 if (height > 1)
@@ -669,23 +648,6 @@ namespace SimpleView_DepthToPointCloud
                 // 执行检测
                 GapDetector.GapResult result = m_gapDetector.ProcessDepthLine(depthLine, width);
                 UpdateGapResult(result, stImage.nFrameNum);
-
-                // 连续3帧异常触发截图
-                if (m_consecutiveAnomalyFrames >= ANOMALY_TRIGGER_THRESHOLD && !m_hasAnomaly)
-                {
-                    m_hasAnomaly = true;
-                    m_anomalyFrameNum = (int)stImage.nFrameNum;
-                    CaptureSnapshot();
-                    
-                    // 可选：自动保存截图到文件
-                    SaveSnapshotToFile();
-                    
-                    // 可选：保存深度原始数据
-                    if (depthValues != null)
-                    {
-                        SaveDepthDataToFile(depthValues, width, height, stImage.nFrameNum);
-                    }
-                }
             }
             catch (Exception ex)
             {
@@ -763,6 +725,21 @@ namespace SimpleView_DepthToPointCloud
                     m_consecutiveAnomalyFrames++;
                     lblMadValue.ForeColor = Color.Red;
 
+                    // 连续3帧异常触发截图
+                    if (m_consecutiveAnomalyFrames >= ANOMALY_TRIGGER_THRESHOLD && !m_hasAnomaly)
+                    {
+                        m_hasAnomaly = true;
+                        m_anomalyFrameNum = (int)frameNum;
+                        CaptureSnapshot();
+
+                        // 显示异常原因
+                        string reasons = result.AnomalyReasons.Count > 0
+                            ? string.Join(" | ", result.AnomalyReasons)
+                            : "未知异常";
+                        lblSnapStatus.Text = $"⚠️ 异常触发 (连续{m_consecutiveAnomalyFrames}帧) | {reasons}";
+                        lblSnapStatus.ForeColor = Color.Red;
+                    }
+
                     // 显示当前异常原因
                     if (result.AnomalyReasons.Count > 0)
                     {
@@ -793,12 +770,12 @@ namespace SimpleView_DepthToPointCloud
                 if (result.InferredTurn == 0)
                 {
                     lblDepthMinMax.Text = $"匝数: 未检测到 (帧{frameNum})";
-                    lblDepthMinMax.ForeColor = Color.Blue;
+                    lblDepthMinMax.ForeColor = Color.Orange;
                 }
                 else
                 {
                     lblDepthMinMax.Text = $"匝数: {result.InferredTurn} / {m_gapDetector.TurnsPerLayer}";
-                    lblDepthMinMax.ForeColor = result.InferredTurn == m_gapDetector.TurnsPerLayer ? Color.White : Color.Blue;
+                    lblDepthMinMax.ForeColor = result.InferredTurn == m_gapDetector.TurnsPerLayer ? Color.White : Color.Yellow;
                 }
             }
             else
@@ -808,302 +785,34 @@ namespace SimpleView_DepthToPointCloud
             }
         }
 
-        /// <summary>
-        /// 将深度数据（short[]）渲染为伪彩色 Bitmap
-        /// </summary>
-        private void GenerateDepthBitmap(short[] depthData, int width, int height)
-        {
-            try
-            {
-                if (width <= 0 || height <= 0 || depthData == null || depthData.Length < width * height)
-                    return;
-
-                Bitmap bmp = new Bitmap(width, height);
-                System.Drawing.Imaging.BitmapData bmpData = bmp.LockBits(
-                    new Rectangle(0, 0, width, height),
-                    System.Drawing.Imaging.ImageLockMode.WriteOnly,
-                    System.Drawing.Imaging.PixelFormat.Format24bppRgb);
-
-                int stride = bmpData.Stride;
-                IntPtr scan0 = bmpData.Scan0;
-                byte[] pixels = new byte[stride * height];
-
-                // 查找有效深度范围（排除0值）
-                short minVal = short.MaxValue;
-                short maxVal = short.MinValue;
-                for (int i = 0; i < depthData.Length; i++)
-                {
-                    if (depthData[i] > 0)
-                    {
-                        if (depthData[i] < minVal) minVal = depthData[i];
-                        if (depthData[i] > maxVal) maxVal = depthData[i];
-                    }
-                }
-
-                if (maxVal <= minVal)
-                {
-                    // 没有有效数据，填充黑色
-                    for (int y = 0; y < height; y++)
-                    {
-                        for (int x = 0; x < width; x++)
-                        {
-                            int idx = y * stride + x * 3;
-                            pixels[idx + 0] = 0;     // B
-                            pixels[idx + 1] = 0;     // G
-                            pixels[idx + 2] = 0;     // R
-                        }
-                    }
-                }
-                else
-                {
-                    float range = maxVal - minVal;
-                    for (int y = 0; y < height; y++)
-                    {
-                        for (int x = 0; x < width; x++)
-                        {
-                            int pixelIdx = y * width + x;
-                            int byteIdx = y * stride + x * 3;
-
-                            short val = depthData[pixelIdx];
-                            if (val <= 0)
-                            {
-                                // 无效点：黑色
-                                pixels[byteIdx + 0] = 0;
-                                pixels[byteIdx + 1] = 0;
-                                pixels[byteIdx + 2] = 0;
-                            }
-                            else
-                            {
-                                // 深度值归一化 0~1
-                                float t = (val - minVal) / range;
-                                // 伪彩色映射：黑->蓝->青->绿->黄->红->白
-                                byte r, g, b;
-                                if (t < 0.2f)
-                                {
-                                    float s = t / 0.2f;
-                                    r = 0;
-                                    g = (byte)(s * 128);
-                                    b = (byte)(128 + s * 127);
-                                }
-                                else if (t < 0.4f)
-                                {
-                                    float s = (t - 0.2f) / 0.2f;
-                                    r = 0;
-                                    g = (byte)(128 + s * 127);
-                                    b = (byte)(255 - s * 255);
-                                }
-                                else if (t < 0.6f)
-                                {
-                                    float s = (t - 0.4f) / 0.2f;
-                                    r = (byte)(s * 255);
-                                    g = 255;
-                                    b = 0;
-                                }
-                                else if (t < 0.8f)
-                                {
-                                    float s = (t - 0.6f) / 0.2f;
-                                    r = 255;
-                                    g = (byte)(255 - s * 255);
-                                    b = 0;
-                                }
-                                else
-                                {
-                                    float s = (t - 0.8f) / 0.2f;
-                                    r = 255;
-                                    g = (byte)(s * 255);
-                                    b = (byte)(s * 255);
-                                }
-                                pixels[byteIdx + 0] = b;
-                                pixels[byteIdx + 1] = g;
-                                pixels[byteIdx + 2] = r;
-                            }
-                        }
-                    }
-                }
-
-                Marshal.Copy(pixels, 0, scan0, pixels.Length);
-                bmp.UnlockBits(bmpData);
-
-                // 替换缓存的 Bitmap
-                if (m_currentDepthBitmap != null)
-                {
-                    m_currentDepthBitmap.Dispose();
-                }
-                m_currentDepthBitmap = bmp;
-            }
-            catch
-            {
-                // 生成失败则忽略
-            }
-        }
-
-        /// <summary>
-        /// 截取深度图像显示区域的画面
-        /// </summary>
         private void CaptureSnapshot()
         {
             try
             {
-                if (pictureBoxDepth == null)
-                    return;
-                
-                // 强制刷新 PictureBox 以获取最新图像
-                pictureBoxDepth.Refresh();
-                Application.DoEvents();
-                
-                Bitmap snapshot = null;
-                
-                // 方法1：直接从缓存的深度图像获取（优先使用）
-                if (m_currentDepthBitmap != null)
+                if (pictureBoxDepth.Image != null)
                 {
-                    snapshot = new Bitmap(m_currentDepthBitmap.Width, m_currentDepthBitmap.Height);
-                    using (Graphics g = Graphics.FromImage(snapshot))
+                    if (m_snapshotImage != null)
                     {
-                        g.InterpolationMode = InterpolationMode.HighQualityBicubic;
-                        g.DrawImage(m_currentDepthBitmap, 0, 0);
+                        m_snapshotImage.Dispose();
                     }
+                    m_snapshotImage = new Bitmap(pictureBoxDepth.Image);
                 }
-                // 方法2：从 PictureBox 的 Image 属性获取
-                else if (pictureBoxDepth.Image != null)
-                {
-                    snapshot = new Bitmap(pictureBoxDepth.Image.Width, pictureBoxDepth.Image.Height);
-                    using (Graphics g = Graphics.FromImage(snapshot))
-                    {
-                        g.InterpolationMode = InterpolationMode.HighQualityBicubic;
-                        g.DrawImage(pictureBoxDepth.Image, 0, 0);
-                    }
-                }
-                // 方法3：截取 PictureBox 控件区域（备用方案）
                 else
                 {
                     Rectangle rect = pictureBoxDepth.RectangleToScreen(pictureBoxDepth.ClientRectangle);
-                    if (rect.Width > 0 && rect.Height > 0)
-                    {
-                        snapshot = new Bitmap(rect.Width, rect.Height);
-                        using (Graphics g = Graphics.FromImage(snapshot))
-                        {
-                            g.CopyFromScreen(rect.X, rect.Y, 0, 0, rect.Size);
-                        }
-                    }
-                }
-                
-                if (snapshot != null)
-                {
-                    // 在图像上添加异常标注
-                    using (Graphics g = Graphics.FromImage(snapshot))
-                    {
-                        // 半透明背景
-                        string anomalyText = $"⚠️ 异常触发 - 帧 {m_anomalyFrameNum}";
-                        if (m_lastGapResult != null && m_lastGapResult.AnomalyReasons.Count > 0)
-                        {
-                            anomalyText += $" | {string.Join(",", m_lastGapResult.AnomalyReasons)}";
-                        }
-                        
-                        // 添加时间戳
-                        anomalyText += $" | {DateTime.Now:HH:mm:ss}";
-                        
-                        using (Font font = new Font("Microsoft YaHei", 12, FontStyle.Bold))
-                        using (Brush textBrush = new SolidBrush(Color.Red))
-                        using (Brush bgBrush = new SolidBrush(Color.FromArgb(180, 0, 0, 0)))
-                        {
-                            SizeF textSize = g.MeasureString(anomalyText, font);
-                            Rectangle bgRect = new Rectangle(10, 10, (int)textSize.Width + 20, (int)textSize.Height + 10);
-                            g.FillRectangle(bgBrush, bgRect);
-                            g.DrawString(anomalyText, font, textBrush, 20, 15);
-                        }
-                        
-                        // 添加红框标记异常区域
-                        using (Pen redPen = new Pen(Color.Red, 3))
-                        {
-                            redPen.DashStyle = DashStyle.Dash;
-                            g.DrawRectangle(redPen, 5, 5, snapshot.Width - 10, snapshot.Height - 10);
-                        }
-                    }
-                    
-                    // 替换旧截图
                     if (m_snapshotImage != null)
-                        m_snapshotImage.Dispose();
-                    m_snapshotImage = snapshot;
-                }
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"截图失败: {ex.Message}");
-            }
-        }
-
-        /// <summary>
-        /// 保存截图到文件
-        /// </summary>
-        private void SaveSnapshotToFile()
-        {
-            if (m_snapshotImage != null)
-            {
-                try
-                {
-                    string timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
-                    string filename = $"Anomaly_{timestamp}_Frame{m_anomalyFrameNum}.png";
-                    
-                    // 保存到应用程序目录下的 AnomalySnapshots 文件夹
-                    string directory = Path.Combine(Application.StartupPath, "AnomalySnapshots");
-                    if (!Directory.Exists(directory))
-                        Directory.CreateDirectory(directory);
-                    
-                    string fullPath = Path.Combine(directory, filename);
-                    m_snapshotImage.Save(fullPath, System.Drawing.Imaging.ImageFormat.Png);
-                    
-                    // 更新状态显示
-                    lblSnapStatus.Text = $"⚠️ 异常触发 | 已保存: {filename}";
-                }
-                catch (Exception ex)
-                {
-                    System.Diagnostics.Debug.WriteLine($"保存截图失败: {ex.Message}");
-                    lblSnapStatus.Text = $"异常触发 | 保存失败: {ex.Message}";
-                }
-            }
-        }
-
-        /// <summary>
-        /// 保存深度原始数据到CSV文件
-        /// </summary>
-        private void SaveDepthDataToFile(short[] depthData, int width, int height, uint frameNum)
-        {
-            try
-            {
-                string timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
-                string filename = $"DepthData_{timestamp}_Frame{frameNum}.csv";
-                string directory = Path.Combine(Application.StartupPath, "AnomalySnapshots");
-                if (!Directory.Exists(directory))
-                    Directory.CreateDirectory(directory);
-                
-                string fullPath = Path.Combine(directory, filename);
-                
-                using (StreamWriter writer = new StreamWriter(fullPath))
-                {
-                    // 写入头部信息
-                    writer.WriteLine($"Frame,{frameNum}");
-                    writer.WriteLine($"Width,{width}");
-                    writer.WriteLine($"Height,{height}");
-                    writer.WriteLine($"Timestamp,{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}");
-                    writer.WriteLine("Depth Data (行优先, 行号从0开始):");
-                    
-                    // 写入深度数据
-                    for (int y = 0; y < height; y++)
                     {
-                        for (int x = 0; x < width; x++)
-                        {
-                            writer.Write(depthData[y * width + x]);
-                            if (x < width - 1) writer.Write(",");
-                        }
-                        writer.WriteLine();
+                        m_snapshotImage.Dispose();
+                    }
+                    m_snapshotImage = new Bitmap(rect.Width, rect.Height);
+                    using (Graphics g = Graphics.FromImage(m_snapshotImage))
+                    {
+                        g.CopyFromScreen(rect.Location, Point.Empty, rect.Size);
                     }
                 }
-                
-                System.Diagnostics.Debug.WriteLine($"深度数据已保存: {fullPath}");
             }
-            catch (Exception ex)
+            catch
             {
-                System.Diagnostics.Debug.WriteLine($"保存深度数据失败: {ex.Message}");
             }
         }
 
@@ -1116,7 +825,11 @@ namespace SimpleView_DepthToPointCloud
             else if (!m_hasAnomaly && m_consecutiveAnomalyFrames == 0)
             {
                 // 不覆盖异常状态
-                if (!lblSnapStatus.Text.Contains("异常"))
+                if (lblSnapStatus.Text.Contains("异常"))
+                {
+                    // 保持异常显示
+                }
+                else
                 {
                     lblSnapStatus.Text = "正常 - 等待异常...";
                     lblSnapStatus.ForeColor = Color.Gray;
@@ -1135,7 +848,6 @@ namespace SimpleView_DepthToPointCloud
             using (Graphics g = Graphics.FromImage(bmp))
             {
                 g.Clear(Color.FromArgb(30, 30, 30));
-                g.SmoothingMode = SmoothingMode.AntiAlias;
 
                 int width = bmp.Width;
                 int height = bmp.Height;
@@ -1160,7 +872,7 @@ namespace SimpleView_DepthToPointCloud
                 float thresholdY = marginTop + chartHeight - (float)(5.0 / 10.0 * chartHeight);
                 using (Pen redPen = new Pen(Color.Red, 2))
                 {
-                    redPen.DashStyle = DashStyle.Dash;
+                    redPen.DashStyle = System.Drawing.Drawing2D.DashStyle.Dash;
                     g.DrawLine(redPen, marginLeft, thresholdY, width - marginRight, thresholdY);
                 }
 
@@ -1244,14 +956,8 @@ namespace SimpleView_DepthToPointCloud
             if (m_lastSmoothedData != null && m_lastWidth > 0)
             {
                 m_gapDetector.CalibrateBaseline(m_lastSmoothedData, m_fCoordXUnit);
-                float baselineRaw = m_gapDetector.CalibratedBaselineDepth;
-                float baselineMm = baselineRaw / 100f;
-                lblStatus.Text = $"✓ 基准校准完成 | 基准深度: {baselineRaw:F1} (raw) ≈ {baselineMm:F2} mm";
+                lblStatus.Text = "✓ 基准校准完成（空筒基准已记录）";
                 lblStatus.ForeColor = Color.Green;
-
-                // 同时更新匝数/层数状态栏，显示基准信息
-                lblDepthMinMax.Text = $"基准已校准 | 深度值: {baselineRaw:F0}";
-                lblDepthMinMax.ForeColor = Color.LimeGreen;
             }
             else
             {
@@ -1365,11 +1071,6 @@ namespace SimpleView_DepthToPointCloud
             {
                 m_snapshotImage.Dispose();
                 m_snapshotImage = null;
-            }
-            if (m_currentDepthBitmap != null)
-            {
-                m_currentDepthBitmap.Dispose();
-                m_currentDepthBitmap = null;
             }
             Mv3dLpSDK.MV3D_LP_Finalize();
         }
