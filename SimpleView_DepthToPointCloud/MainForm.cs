@@ -11,7 +11,7 @@ namespace SimpleView_DepthToPointCloud
 {
     public partial class MainForm : Form
     {
-        // 设备相关1
+        // 设备相关
         private IntPtr m_handle = IntPtr.Zero;
         private bool m_bExitMain = false;
         private bool m_bMeasuring = false;
