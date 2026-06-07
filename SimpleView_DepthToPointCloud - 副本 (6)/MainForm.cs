@@ -51,12 +51,9 @@ namespace SimpleView_DepthToPointCloud
         private int m_anomalyFrameNum = 0;
         private int m_consecutiveAnomalyFrames = 0;
         private const int ANOMALY_TRIGGER_THRESHOLD = 3;
-<<<<<<< HEAD
 
         // 缓存当前帧的深度图像 Bitmap（由深度数据生成）
         private Bitmap m_currentDepthBitmap = null;
-=======
->>>>>>> 7bf0d2671fc6175e8020e56d10d4ee5a5bfbab2a
 
         // 单位参数
         private float m_fCoordXUnit = 0.02f;
@@ -72,12 +69,9 @@ namespace SimpleView_DepthToPointCloud
         // 调试按钮
         private Button btnDebug;
 
-<<<<<<< HEAD
         // 深度图像显示区域 GroupBox（需要作为字段，供截图用）
         private GroupBox groupDisplay;
 
-=======
->>>>>>> 7bf0d2671fc6175e8020e56d10d4ee5a5bfbab2a
         enum Mv3dLpImageMode
         {
             MV3D_LP_Origin_Image = 1,
@@ -469,9 +463,6 @@ namespace SimpleView_DepthToPointCloud
                 // 同步参数到检测器
                 SyncParametersToDetector();
 
-                // 同步参数到检测器
-                SyncParametersToDetector();
-
                 m_pollTimer.Start();
             }
             catch (Exception ex)
@@ -649,7 +640,6 @@ namespace SimpleView_DepthToPointCloud
                 {
                     lblGapInfo.Text = "不支持的图像类型用于缝隙检测";
                     return;
-<<<<<<< HEAD
                 }
 
                 if (depthValues == null) return;
@@ -695,34 +685,7 @@ namespace SimpleView_DepthToPointCloud
                     {
                         SaveDepthDataToFile(depthValues, width, height, stImage.nFrameNum);
                     }
-=======
->>>>>>> 7bf0d2671fc6175e8020e56d10d4ee5a5bfbab2a
                 }
-
-                if (depthValues == null) return;
-
-                // 提取中心行数据（多行平均）
-                short[] depthLine;
-                if (height > 1)
-                {
-                    depthLine = GapDetector.ExtractDepthLineAvg(depthValues, width, height, height / 2, halfWindow: 2);
-                }
-                else
-                {
-                    depthLine = depthValues;
-                }
-
-                // 预处理并缓存 smoothed 数据（用于校准和调试）
-                float[] smoothed = PreprocessForDetection(depthLine, width);
-                if (smoothed != null)
-                {
-                    m_lastSmoothedData = smoothed;
-                    m_lastWidth = width;
-                }
-
-                // 执行检测
-                GapDetector.GapResult result = m_gapDetector.ProcessDepthLine(depthLine, width);
-                UpdateGapResult(result, stImage.nFrameNum);
             }
             catch (Exception ex)
             {
@@ -800,7 +763,6 @@ namespace SimpleView_DepthToPointCloud
                     m_consecutiveAnomalyFrames++;
                     lblMadValue.ForeColor = Color.Red;
 
-<<<<<<< HEAD
                     // 显示当前异常原因
                     if (result.AnomalyReasons.Count > 0)
                     {
@@ -810,32 +772,6 @@ namespace SimpleView_DepthToPointCloud
                     {
                         lblMadValue.Text = $"检测状态: 异常 (连续{m_consecutiveAnomalyFrames}帧)";
                     }
-=======
-                    // 连续3帧异常触发截图
-                    if (m_consecutiveAnomalyFrames >= ANOMALY_TRIGGER_THRESHOLD && !m_hasAnomaly)
-                    {
-                        m_hasAnomaly = true;
-                        m_anomalyFrameNum = (int)frameNum;
-                        CaptureSnapshot();
-
-                        // 显示异常原因
-                        string reasons = result.AnomalyReasons.Count > 0
-                            ? string.Join(" | ", result.AnomalyReasons)
-                            : "未知异常";
-                        lblSnapStatus.Text = $"⚠️ 异常触发 (连续{m_consecutiveAnomalyFrames}帧) | {reasons}";
-                        lblSnapStatus.ForeColor = Color.Red;
-                    }
-
-                    // 显示当前异常原因
-                    if (result.AnomalyReasons.Count > 0)
-                    {
-                        lblMadValue.Text = $"异常: {result.AnomalyReasons[0]}";
-                    }
-                    else
-                    {
-                        lblMadValue.Text = $"检测状态: 异常 (连续{m_consecutiveAnomalyFrames}帧)";
-                    }
->>>>>>> 7bf0d2671fc6175e8020e56d10d4ee5a5bfbab2a
                 }
                 else
                 {
@@ -857,20 +793,12 @@ namespace SimpleView_DepthToPointCloud
                 if (result.InferredTurn == 0)
                 {
                     lblDepthMinMax.Text = $"匝数: 未检测到 (帧{frameNum})";
-<<<<<<< HEAD
                     lblDepthMinMax.ForeColor = Color.Blue;
-=======
-                    lblDepthMinMax.ForeColor = Color.Orange;
->>>>>>> 7bf0d2671fc6175e8020e56d10d4ee5a5bfbab2a
                 }
                 else
                 {
                     lblDepthMinMax.Text = $"匝数: {result.InferredTurn} / {m_gapDetector.TurnsPerLayer}";
-<<<<<<< HEAD
                     lblDepthMinMax.ForeColor = result.InferredTurn == m_gapDetector.TurnsPerLayer ? Color.White : Color.Blue;
-=======
-                    lblDepthMinMax.ForeColor = result.InferredTurn == m_gapDetector.TurnsPerLayer ? Color.White : Color.Yellow;
->>>>>>> 7bf0d2671fc6175e8020e56d10d4ee5a5bfbab2a
                 }
             }
             else
@@ -1188,15 +1116,7 @@ namespace SimpleView_DepthToPointCloud
             else if (!m_hasAnomaly && m_consecutiveAnomalyFrames == 0)
             {
                 // 不覆盖异常状态
-<<<<<<< HEAD
                 if (!lblSnapStatus.Text.Contains("异常"))
-=======
-                if (lblSnapStatus.Text.Contains("异常"))
-                {
-                    // 保持异常显示
-                }
-                else
->>>>>>> 7bf0d2671fc6175e8020e56d10d4ee5a5bfbab2a
                 {
                     lblSnapStatus.Text = "正常 - 等待异常...";
                     lblSnapStatus.ForeColor = Color.Gray;
@@ -1324,7 +1244,6 @@ namespace SimpleView_DepthToPointCloud
             if (m_lastSmoothedData != null && m_lastWidth > 0)
             {
                 m_gapDetector.CalibrateBaseline(m_lastSmoothedData, m_fCoordXUnit);
-<<<<<<< HEAD
                 float baselineRaw = m_gapDetector.CalibratedBaselineDepth;
                 float baselineMm = baselineRaw / 100f;
                 lblStatus.Text = $"✓ 基准校准完成 | 基准深度: {baselineRaw:F1} (raw) ≈ {baselineMm:F2} mm";
@@ -1333,10 +1252,6 @@ namespace SimpleView_DepthToPointCloud
                 // 同时更新匝数/层数状态栏，显示基准信息
                 lblDepthMinMax.Text = $"基准已校准 | 深度值: {baselineRaw:F0}";
                 lblDepthMinMax.ForeColor = Color.LimeGreen;
-=======
-                lblStatus.Text = "✓ 基准校准完成（空筒基准已记录）";
-                lblStatus.ForeColor = Color.Green;
->>>>>>> 7bf0d2671fc6175e8020e56d10d4ee5a5bfbab2a
             }
             else
             {

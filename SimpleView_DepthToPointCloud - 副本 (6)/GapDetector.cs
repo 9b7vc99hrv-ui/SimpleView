@@ -281,16 +281,12 @@ namespace SimpleView_DepthToPointCloud
             m_calibratedAvgDepthRaw = 0f;
         }
 
-<<<<<<< HEAD
                 public bool IsCalibrated => m_isCalibrated;
 
         /// <summary>
         /// 获取校准基准值（所有峰的平均原始深度值）
         /// </summary>
         public float CalibratedBaselineDepth => m_calibratedAvgDepthRaw;
-=======
-        public bool IsCalibrated => m_isCalibrated;
->>>>>>> 7bf0d2671fc6175e8020e56d10d4ee5a5bfbab2a
 
         public void SetPeakDetectionMode(bool useValley)
         {
